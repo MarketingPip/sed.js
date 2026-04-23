@@ -1,4 +1,4 @@
-import { sed } from './src/index.js'; // Assuming sed.js is the library to use
+import sed from './src/index.js'; // Assuming sed.js is the library to use
 import * as execa from 'execa';
 
 const myVfs = {
