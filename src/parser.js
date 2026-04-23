@@ -1,4 +1,4 @@
-import {SedLexer} from "./lexer.js";
+import {SedLexer, SedTokenType} from "./lexer.js";
 
 export class SedParser {
   constructor(scripts, extendedRegex = false) { this.scripts = scripts; this.extendedRegex = extendedRegex; this.tokens = []; this.pos = 0; }
