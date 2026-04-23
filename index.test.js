@@ -76,30 +76,19 @@ describe('Sed.js Tests', () => {
     });
 
    it('should handle complex multi-stage transformations (case conversion, hold space, and conditional addressing)', async () => {
-  // Input: One line with vowels, one line without
-      const stdin = `sed is powerful\nxyz`;
-    
-      /**
-       * The Command Explained:
-       * 1. -e 's/[a-z]/\U&/g' -> Convert all lowercase to UPPERCASE (GNU extension)
-       * 2. -e '/[AEIOU]/ { ... }' -> If the line contains a vowel:
-       * h;          -> Copy line to Hold Space
-       * s/./*/g;    -> Replace all chars with '*' (the mask)
-       * G;          -> Append Hold Space to current line (separated by \n)
-       * s/\n/ /;    -> Replace the newline with a space to put them on one line
-       */
-      const command = "-e 's/[a-z]/\\U&/g' -e '/[AEIOU]/ { h; s/./*/g; G; s/\\n/ /; }'";
-      
-      const result = await runSed(command, stdin);
-    
-      // Assertions
-      expect(result.success).toBe(true);
-      
-      // Line 1 should be masked + uppercase because it has vowels
-      // Line 2 should ONLY be uppercase because it lacks vowels
-      const expectedOutput = `*************** SED IS POWERFUL\nXYZ`;
-      expect(result.data).toBe(expectedOutput);
-    });
+  const stdin = `sed is powerful\nxyz`;
+
+  // 1. Convert lowercase to UPPERCASE
+  // 2. If vowels exist: Copy to Hold (h), mask with '*', Append Hold (G), join (s/\n/ /)
+  const command = "-e 's/[a-z]/\\U&/g' -e '/[AEIOU]/ { h; s/./*/g; G; s/\\n/ /; }'";
+  
+  const result = await runSed(command, stdin);
+
+  expect(result.success).toBe(true);
+  
+  const expectedOutput = `*************** SED IS POWERFUL\nXYZ`;
+  expect(result.data).toBe(expectedOutput);
+});
 
     it('should support combined flags (gI)', async () => {
       const stdin = 'Hello hello HELLO';
