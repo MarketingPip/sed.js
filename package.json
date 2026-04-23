@@ -11,6 +11,8 @@
     "execa": "^6.0.0"
   },
   "devDependencies": {
-    "jest": "^29.0.0"
+    "jest": "^29.0.0",
+    "babel-jest": "^29.0.0",   
+    "@babel/preset-env": "^7.18.0"  
   }
 }
