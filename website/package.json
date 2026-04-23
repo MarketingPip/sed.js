@@ -2,8 +2,10 @@
   "name": "my-webpack-project",
   "version": "1.0.0",
   "description": "A Webpack 5 project with Tailwind CSS, PostCSS, and Lucide icons.",
+  "main": "js/main.js",
   "scripts": {
-    "deploy": "webpack --mode production --config ./website/webpack.config.js && gh-pages -d dist"
+    "build:ghpages": "webpack --mode production --config ./webpack.config.js",
+    "deploy": "npm run build:ghpages && gh-pages -d dist",
   },
   "keywords": [],
   "author": "",
