@@ -1,5 +1,5 @@
 import { sed } from './src/index.js'; // Assuming sed.js is the library to use
-import execa from 'execa';
+import * as execa from 'execa';
 
 const myVfs = {
   "notes.txt": "Hello, this is a test file containing the word hello."
