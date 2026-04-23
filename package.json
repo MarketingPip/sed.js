@@ -1,6 +1,7 @@
 {
   "name": "sed-js-tests",
   "version": "1.0.0",
+  "type": "module",
   "description": "Test sed.js with execa",
   "main": "index.js",
   "scripts": {
