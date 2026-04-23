@@ -8,14 +8,14 @@ module.exports = (env, argv) => {
   // Define your entry points (one for each page)
   const entries = {
     index: path.resolve(__dirname, 'js/main.js'),
-   // about: path.resolve(__dirname, 'js/about.js'),
+    playground: path.resolve(__dirname, 'js/playground.js'),
    // contact: path.resolve(__dirname, 'js/contact.js'),
   };
 
   // Define the HTML files you want to create
   const htmlPages = [
     { template: 'pages/index.html', filename: 'index.html', entry: 'index' },
-  //  { template: 'pages/about.html', filename: 'about.html', entry: 'about' },
+    { template: 'pages/playground.html', filename: 'playground.html', entry: 'playground' },
     //{ template: 'pages/contact.html', filename: 'contact.html', entry: 'contact' },
   ];
 
