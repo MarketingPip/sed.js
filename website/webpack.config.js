@@ -7,7 +7,7 @@ module.exports = (env, argv) => {
 
   // Define your entry points (one for each page)
   const entries = {
-    index: path.resolve(__dirname, 'js/index.js'),
+    index: path.resolve(__dirname, 'js/main.js'),
    // about: path.resolve(__dirname, 'js/about.js'),
    // contact: path.resolve(__dirname, 'js/contact.js'),
   };
