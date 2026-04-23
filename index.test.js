@@ -17,7 +17,7 @@ async function fakeShell(cmd) {
 }
 
 // Test function that uses sed.js
-async function runSed(command, stdin = '') {
+async function runSed(command, stdin = null) {
   try {
     let result;
     if (!stdin) {
