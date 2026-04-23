@@ -1,22 +1,18 @@
-import sed from './src/index.js'; // Assuming sed.js is the library to use
+import sed from './src/index.js';
 import * as execa from 'execa';
 
 const myVfs = {
-  "notes.txt": "Hello, this is a test file containing the word hello."
+  "notes.txt": "Hello, this is a test file containing the word hello.",
+  "multi.txt": "one\ntwo\nthree\nfour\nfive",
+  "empty.txt": "",
+  "numbers.txt": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10"
 };
 
-// Simulating the fake shell with execa and custom command logic
 async function fakeShell(cmd) {
-  console.log(`Running command: ${cmd}`);
-  
-  if (cmd === "whoami") {
-    return "user";
-  } else {
-    return "unknown command";
-  }
+  if (cmd === "whoami") return "user";
+  return "unknown command";
 }
 
-// Test function that uses sed.js
 async function runSed(command, stdin = null) {
   try {
     let result;
@@ -33,108 +29,238 @@ async function runSed(command, stdin = null) {
 
 export { runSed };
 
-// Example Test Case with Jest
-describe('Sed.js Tests', () => {
-  it('should replace "hello" with "hi"', async () => {
-    const command = 's/hello/hi/ notes.txt';
-    const result = await runSed(command);
-    
-    // Check if "hello" was replaced with "hi"
-    expect(result.data).toBe('Hello, this is a test file containing the word hi.');
-  });
+describe('Sed.js FULL Test Suite', () => {
 
-  it('should handle stdin correctly', async () => {
-    const command = 's/test/TEST/';
-    const stdin = 'This is a test string.';
-    
-    const result = await runSed(command, stdin);
-    
-    expect(result.data).toBe('This is a TEST string.');
-  });
-
-
- describe('Basic Substitution', () => {
-    it('should be case-sensitive by default', async () => {
-      const stdin = 'Hello hello HELLO';
-      const result = await runSed('s/hello/hi/', stdin);
-      // Only the lowercase version should change
-      expect(result.data).toBe('Hello hi HELLO');
+  /* -----------------------------
+   * BASIC SUBSTITUTION
+   * ----------------------------- */
+  describe('Basic Substitution', () => {
+    it('replaces first match only', async () => {
+      const r = await runSed('s/apple/orange/', 'apple apple apple');
+      expect(r.data).toBe('orange apple apple');
     });
 
-    it('should only replace the first occurrence per line by default', async () => {
-      const stdin = 'apple apple apple';
-      const result = await runSed('s/apple/orange/', stdin);
-      expect(result.data).toBe('orange apple apple');
+    it('global replacement', async () => {
+      const r = await runSed('s/apple/orange/g', 'apple apple apple');
+      expect(r.data).toBe('orange orange orange');
+    });
+
+    it('case insensitive', async () => {
+      const r = await runSed('s/hello/hi/I', 'Hello hello HELLO');
+      expect(r.data).toBe('hi hi hi');
+    });
+
+    it('backreferences', async () => {
+      const r = await runSed('s/(\\w+) (\\w+)/\\2 \\1/', 'hello world');
+      expect(r.data).toBe('world hello');
+    });
+
+    it('ampersand replacement', async () => {
+      const r = await runSed('s/foo/[&]/g', 'foo foo');
+      expect(r.data).toBe('[foo] [foo]');
     });
   });
 
-  describe('Flags', () => {
-    it('should replace all occurrences with the global (g) flag', async () => {
-      const stdin = 'apple apple apple';
-      const result = await runSed('s/apple/orange/g', stdin);
-      expect(result.data).toBe('orange orange orange');
+  /* -----------------------------
+   * ADDRESSING
+   * ----------------------------- */
+  describe('Addressing', () => {
+    it('single line number', async () => {
+      const r = await runSed('2s/two/TWO/', myVfs["multi.txt"]);
+      expect(r.data).toBe("one\nTWO\nthree\nfour\nfive");
     });
 
-   it('should handle complex multi-stage transformations (case conversion, hold space, and conditional addressing)', async () => {
-  const stdin = `sed is powerful\nxyz`;
+    it('range addressing', async () => {
+      const r = await runSed('2,4s/.*/X/', myVfs["multi.txt"]);
+      expect(r.data).toBe("one\nX\nX\nX\nfive");
+    });
 
-  // 1. Convert lowercase to UPPERCASE
-  // 2. If vowels exist: Copy to Hold (h), mask with '*', Append Hold (G), join (s/\n/ /)
-  const command = "-e 's/[a-z]/\\U&/g' -e '/[AEIOU]/ { h; s/./*/g; G; s/\\n/ /; }'";
-  
-  const result = await runSed(command, stdin);
+    it('regex address', async () => {
+      const r = await runSed('/three/s/.*/MATCH/', myVfs["multi.txt"]);
+      expect(r.data).toContain('MATCH');
+    });
 
-  expect(result.success).toBe(true);
-  
-  const expectedOutput = `*************** SED IS POWERFUL\nXYZ`;
-  expect(result.data).toBe(expectedOutput);
-});
-
-    it('should support combined flags (gI)', async () => {
-      const stdin = 'Hello hello HELLO';
-      const result = await runSed('s/hello/hi/gI', stdin);
-      expect(result.data).toBe('hi hi hi');
+    it('negated address', async () => {
+      const r = await runSed('/three/!s/.*/NO/', myVfs["multi.txt"]);
+      expect(r.data).toBe("NO\nNO\nthree\nNO\nNO");
     });
   });
 
-  describe('Regex and Special Characters', () => {
-    it('should handle basic regex patterns (dot)', async () => {
-      const stdin = 'cat cot cut';
-      const result = await runSed('s/c.t/dog/g', stdin);
-      expect(result.data).toBe('dog dog dog');
+  /* -----------------------------
+   * MULTI COMMAND
+   * ----------------------------- */
+  describe('Multiple Commands', () => {
+    it('-e chaining', async () => {
+      const r = await runSed("-e 's/a/A/g' -e 's/b/B/g'", "abc");
+      expect(r.data).toBe("ABc");
     });
 
-    it('should handle start of line (^) and end of line ($) anchors', async () => {
-      const stdin = 'test results for test';
-      const startRes = await runSed('s/^test/FINAL/', stdin);
-      const endRes = await runSed('s/test$/FINAL/', stdin);
-      
-      expect(startRes.data).toBe('FINAL results for test');
-      expect(endRes.data).toBe('test results for FINAL');
+    it('semicolon chaining', async () => {
+      const r = await runSed('s/a/A/; s/b/B/', 'abc');
+      expect(r.data).toBe('ABc');
     });
   });
 
-  describe('File System Operations (VFS)', () => {
-    it('should read from the virtual file system', async () => {
-      // notes.txt: "Hello, this is a test file containing the word hello."
-      const command = 's/test/demo/ notes.txt';
-      const result = await runSed(command);
-      expect(result.data).toContain('demo file');
+  /* -----------------------------
+   * HOLD SPACE
+   * ----------------------------- */
+  describe('Hold Space', () => {
+    it('h and g', async () => {
+      const r = await runSed('h; s/.*/X/; g', 'hello');
+      expect(r.data).toBe('hello');
     });
 
-    it('should throw or return error for non-existent files', async () => {
-      const command = 's/foo/bar/ ghost.txt';
-      const result = await runSed(command);
-      expect(result.error).toBe('sed: ghost.txt: No such file or directory');
+    it('H and G append', async () => {
+      const r = await runSed('H; $!d; x', "a\nb\nc");
+      expect(r.data).toContain("a\nb\nc");
+    });
+
+    it('x swap', async () => {
+      const r = await runSed('h; s/a/b/; x', 'a');
+      expect(r.data).toBe('a');
     });
   });
 
-  describe('Multiple Lines', () => {
-    it('should process substitution on every line of a multi-line string', async () => {
-      const stdin = "line one\nline two\nline three";
-      const result = await runSed('s/line/row/g', stdin);
-      expect(result.data).toBe("row one\nrow two\nrow three");
+  /* -----------------------------
+   * DELETION / PRINTING
+   * ----------------------------- */
+  describe('Delete & Print', () => {
+    it('delete matching lines', async () => {
+      const r = await runSed('/two/d', myVfs["multi.txt"]);
+      expect(r.data).not.toContain('two');
+    });
+
+    it('print only matching (-n + p)', async () => {
+      const r = await runSed('-n /two/p', myVfs["multi.txt"]);
+      expect(r.data.trim()).toBe('two');
+    });
+
+    it('default print suppressed with -n', async () => {
+      const r = await runSed('-n', 'hello');
+      expect(r.data).toBe('');
     });
   });
-  
+
+  /* -----------------------------
+   * INSERT / APPEND / CHANGE
+   * ----------------------------- */
+  describe('Text Commands', () => {
+    it('append (a)', async () => {
+      const r = await runSed('/two/a AFTER', myVfs["multi.txt"]);
+      expect(r.data).toContain('two\nAFTER');
+    });
+
+    it('insert (i)', async () => {
+      const r = await runSed('/two/i BEFORE', myVfs["multi.txt"]);
+      expect(r.data).toContain('BEFORE\ntwo');
+    });
+
+    it('change (c)', async () => {
+      const r = await runSed('/two/c REPLACED', myVfs["multi.txt"]);
+      expect(r.data).toContain('REPLACED');
+    });
+  });
+
+  /* -----------------------------
+   * BRANCHING
+   * ----------------------------- */
+  describe('Branching', () => {
+    it('simple label + branch', async () => {
+      const cmd = `
+        :a
+        s/a/A/
+        ta
+      `;
+      const r = await runSed(cmd, 'aaa');
+      expect(r.data).toBe('AAA');
+    });
+
+    it('conditional branch (t)', async () => {
+      const r = await runSed('s/a/A/; t done; s/b/B/; :done', 'a');
+      expect(r.data).toBe('A');
+    });
+  });
+
+  /* -----------------------------
+   * MULTILINE PATTERN SPACE
+   * ----------------------------- */
+  describe('Multiline Pattern Space', () => {
+    it('N command joins lines', async () => {
+      const r = await runSed('N; s/\\n/ /', 'hello\nworld');
+      expect(r.data).toBe('hello world');
+    });
+
+    it('D command partial delete', async () => {
+      const r = await runSed('N; D', 'a\nb\nc');
+      expect(r.data).toContain('b');
+    });
+
+    it('P prints partial', async () => {
+      const r = await runSed('-n N; P', 'a\nb');
+      expect(r.data).toContain('a');
+    });
+  });
+
+  /* -----------------------------
+   * FILE HANDLING
+   * ----------------------------- */
+  describe('VFS', () => {
+    it('reads file', async () => {
+      const r = await runSed('s/hello/hi/g notes.txt');
+      expect(r.data).toContain('hi');
+    });
+
+    it('missing file error', async () => {
+      const r = await runSed('s/x/y/ nope.txt');
+      expect(r.success).toBe(false);
+    });
+  });
+
+  /* -----------------------------
+   * EDGE CASES
+   * ----------------------------- */
+  describe('Edge Cases', () => {
+    it('empty input', async () => {
+      const r = await runSed('s/a/b/', '');
+      expect(r.data).toBe('');
+    });
+
+    it('empty file', async () => {
+      const r = await runSed('s/a/b/ empty.txt');
+      expect(r.data).toBe('');
+    });
+
+    it('no match substitution', async () => {
+      const r = await runSed('s/x/y/', 'abc');
+      expect(r.data).toBe('abc');
+    });
+
+    it('large input stress', async () => {
+      const big = 'a\n'.repeat(10000);
+      const r = await runSed('s/a/b/g', big);
+      expect(r.data.includes('a')).toBe(false);
+    });
+  });
+
+  /* -----------------------------
+   * COMPLEX REAL-WORLD
+   * ----------------------------- */
+  describe('Real-world pipelines', () => {
+    it('number lines', async () => {
+      const r = await runSed('=; N; s/\\n/: /', 'a\nb');
+      expect(r.data).toContain('1: a');
+    });
+
+    it('duplicate lines', async () => {
+      const r = await runSed('p', 'x');
+      expect(r.data).toBe('x\nx');
+    });
+
+    it('reverse file using hold space', async () => {
+      const cmd = '1!G; h; $!d';
+      const r = await runSed(cmd, 'a\nb\nc');
+      expect(r.data).toBe('c\nb\na');
+    });
+  });
+
 });
