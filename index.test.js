@@ -191,9 +191,9 @@ describe('Sed.js FULL Test Suite', () => {
     });
 
     it('D command partial delete', async () => {
-      const r = await runSed('N; D', 'a\nb\nc');
-      expect(r.data).toContain('b');
-    });
+    const r = await runSed('N; D', 'a\nb\nc');
+    expect(r.data).toBe('c');
+  });
 
     it('P prints partial', async () => {
       const r = await runSed('-n N; P', 'a\nb');
@@ -248,9 +248,8 @@ describe('Sed.js FULL Test Suite', () => {
   describe('Real-world pipelines', () => {
     it('number lines', async () => {
       const r = await runSed('=; N; s/\\n/: /', 'a\nb');
-      expect(r.data).toContain('1: a');
+      expect(r.data).toContain('1\na: b'); 
     });
-
     it('duplicate lines', async () => {
       const r = await runSed('p', 'x');
       expect(r.data).toBe('x\nx');
