@@ -37,7 +37,7 @@ export { runSed };
 // Example Test Case with Jest
 describe('Sed.js Tests', () => {
   it('should replace "hello" with "hi"', async () => {
-    const command = 's/hello/hi/';
+    const command = 's/hello/hi/ notes.txt';
     const result = await runSed(command);
     
     // Check if "hello" was replaced with "hi"
