@@ -633,7 +633,7 @@ function processReplacement(replacement, match, groups) {
   return result;
 }
 
-function executeCommand(cmd, state) {
+async function executeCommand(cmd, state, shell=null) {
   const { lineNumber, totalLines, patternSpace } = state;
   if (cmd.type === "label") return;
   if (!isInRange(cmd.address, lineNumber, totalLines, patternSpace, state.rangeStates, state)) return;
@@ -708,13 +708,33 @@ function executeCommand(cmd, state) {
     case "readFileLine": state.pendingFileReads.push({ filename: cmd.filename, wholeFile: false }); break;
     case "writeFile": state.pendingFileWrites.push({ filename: cmd.filename, content: `${state.patternSpace}\n` }); break;
     case "writeFirstLine": { const newlineIdx = state.patternSpace.indexOf("\n"); state.pendingFileWrites.push({ filename: cmd.filename, content: `${newlineIdx !== -1 ? state.patternSpace.slice(0, newlineIdx) : state.patternSpace}\n` }); break; }
-    case "execute": state.errorMessage = "sed: e command is not supported in this environment"; state.quit = true; break;
+    // Handling an unsupported command in the 'execute' case
+    case "execute":
+      if(shell){
+            // The 'e' command (standalone)
+            if (cmd.command) {
+              // Scenario: e command (ignores pattern space, just emits output)
+              const output = await ctx.shell(cmd.command);
+              state.lineNumberOutput.push(output); 
+              break;
+            } else {
+              // Scenario: s/pattern/replacement/e (executes pattern space)
+              const output = await ctx.shell(state.patternSpace);
+              state.patternSpace = output.trimEnd();
+              break;
+            }
+      };
+      
+    state.errorMessage = "sed: e command is not supported in this environment";
+
+    state.quit = true;
+    break;
     case "transliterate": { let result = ""; for (const char of state.patternSpace) { const idx = cmd.source.indexOf(char); result += idx !== -1 ? cmd.dest[idx] : char; } state.patternSpace = result; break; }
     case "lineNumber": state.lineNumberOutput.push(String(state.lineNumber)); break;
   }
 }
 
-function executeCommands(commands, state, ctx) {
+async function executeCommands(commands, state, ctx) {
   const labelIndex = new Map();
   for (let i = 0; i < commands.length; i++) if (commands[i].type === "label") labelIndex.set(commands[i].name, i);
   let i = 0;
@@ -761,7 +781,7 @@ function executeCommands(commands, state, ctx) {
 
     if (cmd.type === "group") {
       if (isInRange(cmd.address, state.lineNumber, state.totalLines, state.patternSpace, state.rangeStates, state)) {
-        executeCommands(cmd.commands, state, ctx);
+        await executeCommands(cmd.commands, state, ctx);
         if (state.branchRequest) {
           const target = labelIndex.get(state.branchRequest);
           if (target !== undefined) { state.branchRequest = undefined; i = target; continue; }
@@ -771,7 +791,7 @@ function executeCommands(commands, state, ctx) {
       i++; continue;
     }
 
-    executeCommand(cmd, state); i++;
+    await executeCommand(cmd, state, ctx.shell); i++;
   }
   return state.linesConsumedInCycle;
 }
@@ -800,7 +820,7 @@ async function processContent(content, commands, silent, options = {}) {
     do {
       cycleIterations++; if (cycleIterations > 10000) break;
       state.restartCycle = false; state.pendingFileReads = []; state.pendingFileWrites =[];
-      executeCommands(commands, state, ctx);
+      await executeCommands(commands, state, ctx);
 
       if (vfs) {
         for (const read of state.pendingFileReads) {
@@ -873,6 +893,7 @@ function parseShellString(str) {
 export default async function sed(commandStr, options = {}) {
   const args = Array.isArray(commandStr) ? commandStr : parseShellString(commandStr);
   const vfs = options.vfs || {};
+  const shell = options.shell || null;
   let stdin = options.stdin !== undefined ? options.stdin : "";
   
   const scripts =[]; let silent = false; let inPlace = false; let extendedRegex = false; const files = [];
@@ -914,7 +935,7 @@ export default async function sed(commandStr, options = {}) {
       if (file === "-") continue;
       if (!(file in vfs)) throw new Error(`sed: ${file}: No such file or directory`);
       const fileContent = vfs[file];
-      const result = await processContent(fileContent, commands, effectiveSilent, { filename: file, vfs });
+      const result = await processContent(fileContent, commands, effectiveSilent, { filename: file, vfs, shell});
       if (result.errorMessage) throw new Error(result.errorMessage);
       vfs[file] = result.output;
     }
@@ -924,7 +945,7 @@ export default async function sed(commandStr, options = {}) {
   let content = "";
   if (files.length === 0) {
     content = stdin;
-    const result = await processContent(content, commands, effectiveSilent, { vfs });
+    const result = await processContent(content, commands, effectiveSilent, { vfs, shell });
     if (result.errorMessage) throw new Error(result.errorMessage);
     return result.output;
   }
@@ -941,7 +962,7 @@ export default async function sed(commandStr, options = {}) {
     content += fileContent;
   }
 
-  const result = await processContent(content, commands, effectiveSilent, { filename: files.length === 1 ? files[0] : undefined, vfs });
+  const result = await processContent(content, commands, effectiveSilent, { filename: files.length === 1 ? files[0] : undefined, vfs, shell });
   if (result.errorMessage) throw new Error(result.errorMessage);
   return result.output;
 }
