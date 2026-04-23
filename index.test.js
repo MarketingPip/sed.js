@@ -25,7 +25,7 @@ async function runSed(command, stdin = null) {
     } else {
       result = await sed(command, { stdin, shell: fakeShell });
     }
-    return result;
+    return { success: true, data: result, error: null };
   } catch (err) {
     return { success: false, data: null, error: err.message };
   }
@@ -40,7 +40,7 @@ describe('Sed.js Tests', () => {
     const result = await runSed(command);
     
     // Check if "hello" was replaced with "hi"
-    expect(result).toBe('Hello, this is a test file containing the word hi.');
+    expect(result.data).toBe('Hello, this is a test file containing the word hi.');
   });
 
   it('should handle stdin correctly', async () => {
@@ -49,7 +49,7 @@ describe('Sed.js Tests', () => {
     
     const result = await runSed(command, stdin);
     
-    expect(result).toBe('This is a TEST string.');
+    expect(result.data).toBe('This is a TEST string.');
   });
 
 
@@ -58,13 +58,13 @@ describe('Sed.js Tests', () => {
       const stdin = 'Hello hello HELLO';
       const result = await runSed('s/hello/hi/', stdin);
       // Only the lowercase version should change
-      expect(result).toBe('Hello hi HELLO');
+      expect(result.data).toBe('Hello hi HELLO');
     });
 
     it('should only replace the first occurrence per line by default', async () => {
       const stdin = 'apple apple apple';
       const result = await runSed('s/apple/orange/', stdin);
-      expect(result).toBe('orange apple apple');
+      expect(result.data).toBe('orange apple apple');
     });
   });
 
@@ -72,20 +72,20 @@ describe('Sed.js Tests', () => {
     it('should replace all occurrences with the global (g) flag', async () => {
       const stdin = 'apple apple apple';
       const result = await runSed('s/apple/orange/g', stdin);
-      expect(result).toBe('orange orange orange');
+      expect(result.data).toBe('orange orange orange');
     });
 
     it('should ignore case with the (I or i) flag', async () => {
       const stdin = 'Hello hello HELLO';
       const result = await runSed('s/hello/hi/i', stdin);
       // Depending on your implementation, it usually hits the first match it finds
-      expect(result).toBe('hi hello HELLO');
+      expect(result.data).toBe('hi hello HELLO');
     });
 
     it('should support combined flags (gI)', async () => {
       const stdin = 'Hello hello HELLO';
       const result = await runSed('s/hello/hi/gI', stdin);
-      expect(result).toBe('hi hi hi');
+      expect(result.data).toBe('hi hi hi');
     });
   });
 
@@ -93,7 +93,7 @@ describe('Sed.js Tests', () => {
     it('should handle basic regex patterns (dot)', async () => {
       const stdin = 'cat cot cut';
       const result = await runSed('s/c.t/dog/g', stdin);
-      expect(result).toBe('dog dog dog');
+      expect(result.data).toBe('dog dog dog');
     });
 
     it('should handle start of line (^) and end of line ($) anchors', async () => {
@@ -101,8 +101,8 @@ describe('Sed.js Tests', () => {
       const startRes = await runSed('s/^test/FINAL/', stdin);
       const endRes = await runSed('s/test$/FINAL/', stdin);
       
-      expect(startRes).toBe('FINAL results for test');
-      expect(endRes).toBe('test results for FINAL');
+      expect(startRes.data).toBe('FINAL results for test');
+      expect(endRes.data).toBe('test results for FINAL');
     });
   });
 
@@ -111,7 +111,7 @@ describe('Sed.js Tests', () => {
       // notes.txt: "Hello, this is a test file containing the word hello."
       const command = 's/test/demo/ notes.txt';
       const result = await runSed(command);
-      expect(result).toContain('demo file');
+      expect(result.data).toContain('demo file');
     });
 
     it('should throw or return error for non-existent files', async () => {
@@ -125,7 +125,7 @@ describe('Sed.js Tests', () => {
     it('should process substitution on every line of a multi-line string', async () => {
       const stdin = "line one\nline two\nline three";
       const result = await runSed('s/line/row/g', stdin);
-      expect(result).toBe("row one\nrow two\nrow three");
+      expect(result.data).toBe("row one\nrow two\nrow three");
     });
   });
   
