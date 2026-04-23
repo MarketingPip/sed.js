@@ -7,8 +7,7 @@
     "test": "jest"
   },
   "dependencies": {
-    "execa": "^6.0.0",
-    "sed.js": "^1.0.0"
+    "execa": "^6.0.0"
   },
   "devDependencies": {
     "jest": "^29.0.0"
