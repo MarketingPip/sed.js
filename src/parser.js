@@ -1,6 +1,6 @@
 import {SedLexer} from "./lexer.js";
 
-export class SedParser {
+class SedParser {
   constructor(scripts, extendedRegex = false) { this.scripts = scripts; this.extendedRegex = extendedRegex; this.tokens = []; this.pos = 0; }
   parse() {
     const allCommands =[];
@@ -119,7 +119,7 @@ export class SedParser {
   isAtEnd() { return this.peek().type === SedTokenType.EOF; }
 }
 
-function parseMultipleScripts(scripts, extendedRegex = false) {
+export function parseMultipleScripts(scripts, extendedRegex = false) {
   let silentMode = false; let extendedRegexFromComment = false; const joinedScripts =[];
   for (let i = 0; i < scripts.length; i++) {
     let script = scripts[i];
