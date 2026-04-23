@@ -1,6 +1,6 @@
 import {SedLexer} from "./lexer.js";
 
-class SedParser {
+export class SedParser {
   constructor(scripts, extendedRegex = false) { this.scripts = scripts; this.extendedRegex = extendedRegex; this.tokens = []; this.pos = 0; }
   parse() {
     const allCommands =[];
