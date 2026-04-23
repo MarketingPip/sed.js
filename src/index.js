@@ -710,16 +710,16 @@ async function executeCommand(cmd, state, shell=null) {
     case "writeFirstLine": { const newlineIdx = state.patternSpace.indexOf("\n"); state.pendingFileWrites.push({ filename: cmd.filename, content: `${newlineIdx !== -1 ? state.patternSpace.slice(0, newlineIdx) : state.patternSpace}\n` }); break; }
     // Handling an unsupported command in the 'execute' case
     case "execute":
-      if(shell){
+      if (shell && typeof shell === 'function') {
             // The 'e' command (standalone)
             if (cmd.command) {
               // Scenario: e command (ignores pattern space, just emits output)
-              const output = await ctx.shell(cmd.command);
+              const output = await shell(cmd.command);
               state.lineNumberOutput.push(output); 
               break;
             } else {
               // Scenario: s/pattern/replacement/e (executes pattern space)
-              const output = await ctx.shell(state.patternSpace);
+              const output = await shell(state.patternSpace);
               state.patternSpace = output.trimEnd();
               break;
             }
