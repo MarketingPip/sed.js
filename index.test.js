@@ -1,5 +1,4 @@
 import sed from './src/index.js';
-import * as execa from 'execa';
 
 const myVfs = {
   "notes.txt": "Hello, this is a test file containing the word hello.",
@@ -16,11 +15,13 @@ async function fakeShell(cmd) {
 async function runSed(command, stdin = null) {
   try {
     let result;
-    if (!stdin) {
+
+    if (stdin === null || stdin === undefined) {
       result = await sed(command, { vfs: myVfs, shell: fakeShell });
     } else {
       result = await sed(command, { stdin, shell: fakeShell });
     }
+
     return { success: true, data: result, error: null };
   } catch (err) {
     return { success: false, data: null, error: err.message };
@@ -30,7 +31,6 @@ async function runSed(command, stdin = null) {
 export { runSed };
 
 describe('Sed.js FULL Test Suite', () => {
-
   /* -----------------------------
    * BASIC SUBSTITUTION
    * ----------------------------- */
@@ -59,6 +59,41 @@ describe('Sed.js FULL Test Suite', () => {
       const r = await runSed('s/foo/[&]/g', 'foo foo');
       expect(r.data).toBe('[foo] [foo]');
     });
+
+    it('is case-sensitive by default', async () => {
+      const r = await runSed('s/hello/hi/', 'Hello hello HELLO');
+      expect(r.data).toBe('Hello hi HELLO');
+    });
+
+    it('only replaces the first occurrence per line by default', async () => {
+      const r = await runSed('s/apple/orange/', 'apple apple apple');
+      expect(r.data).toBe('orange apple apple');
+    });
+
+    it('supports combined flags (gI)', async () => {
+      const r = await runSed('s/hello/hi/gI', 'Hello hello HELLO');
+      expect(r.data).toBe('hi hi hi');
+    });
+  });
+
+  /* -----------------------------
+   * REGEX AND SPECIAL CHARACTERS
+   * ----------------------------- */
+  describe('Regex and Special Characters', () => {
+    it('regex dot matches any character', async () => {
+      const r = await runSed('s/c.t/dog/g', 'cat cot cut');
+      expect(r.data).toBe('dog dog dog');
+    });
+
+    it('handles start (^) and end ($) anchors', async () => {
+      const input = 'test results for test';
+
+      const start = await runSed('s/^test/FINAL/', input);
+      const end = await runSed('s/test$/FINAL/', input);
+
+      expect(start.data).toBe('FINAL results for test');
+      expect(end.data).toBe('test results for FINAL');
+    });
   });
 
   /* -----------------------------
@@ -66,22 +101,22 @@ describe('Sed.js FULL Test Suite', () => {
    * ----------------------------- */
   describe('Addressing', () => {
     it('single line number', async () => {
-      const r = await runSed('2s/two/TWO/', myVfs["multi.txt"]);
+      const r = await runSed('2s/two/TWO/', myVfs.multi.txt);
       expect(r.data).toBe("one\nTWO\nthree\nfour\nfive");
     });
 
     it('range addressing', async () => {
-      const r = await runSed('2,4s/.*/X/', myVfs["multi.txt"]);
+      const r = await runSed('2,4s/.*/X/', myVfs.multi.txt);
       expect(r.data).toBe("one\nX\nX\nX\nfive");
     });
 
     it('regex address', async () => {
-      const r = await runSed('/three/s/.*/MATCH/', myVfs["multi.txt"]);
+      const r = await runSed('/three/s/.*/MATCH/', myVfs.multi.txt);
       expect(r.data).toContain('MATCH');
     });
 
     it('negated address', async () => {
-      const r = await runSed('/three/!s/.*/NO/', myVfs["multi.txt"]);
+      const r = await runSed('/three/!s/.*/NO/', myVfs.multi.txt);
       expect(r.data).toBe("NO\nNO\nthree\nNO\nNO");
     });
   });
@@ -91,13 +126,25 @@ describe('Sed.js FULL Test Suite', () => {
    * ----------------------------- */
   describe('Multiple Commands', () => {
     it('-e chaining', async () => {
-      const r = await runSed("-e 's/a/A/g' -e 's/b/B/g'", "abc");
-      expect(r.data).toBe("ABc");
+      const r = await runSed("-e 's/a/A/g' -e 's/b/B/g'", 'abc');
+      expect(r.data).toBe('ABc');
     });
 
     it('semicolon chaining', async () => {
       const r = await runSed('s/a/A/; s/b/B/', 'abc');
       expect(r.data).toBe('ABc');
+    });
+
+    it('complex multi-stage transformation (case + hold + conditional)', async () => {
+      const stdin = `sed is powerful\nxyz`;
+      const command = "-e 's/[a-z]/\\U&/g' -e '/[AEIOU]/ { h; s/./*/g; G; s/\\n/ /; }'";
+
+      const r = await runSed(command, stdin);
+
+      expect(r.success).toBe(true);
+
+      const expected = `*************** SED IS POWERFUL\nXYZ`;
+      expect(r.data).toBe(expected);
     });
   });
 
@@ -111,7 +158,7 @@ describe('Sed.js FULL Test Suite', () => {
     });
 
     it('H and G append', async () => {
-      const r = await runSed('H; $!d; x', "a\nb\nc");
+      const r = await runSed('H; $!d; x', 'a\nb\nc');
       expect(r.data).toContain("a\nb\nc");
     });
 
@@ -126,12 +173,12 @@ describe('Sed.js FULL Test Suite', () => {
    * ----------------------------- */
   describe('Delete & Print', () => {
     it('delete matching lines', async () => {
-      const r = await runSed('/two/d', myVfs["multi.txt"]);
+      const r = await runSed('/two/d', myVfs.multi.txt);
       expect(r.data).not.toContain('two');
     });
 
     it('print only matching (-n + p)', async () => {
-      const r = await runSed('-n /two/p', myVfs["multi.txt"]);
+      const r = await runSed('-n /two/p', myVfs.multi.txt);
       expect(r.data.trim()).toBe('two');
     });
 
@@ -146,17 +193,17 @@ describe('Sed.js FULL Test Suite', () => {
    * ----------------------------- */
   describe('Text Commands', () => {
     it('append (a)', async () => {
-      const r = await runSed('/two/a AFTER', myVfs["multi.txt"]);
+      const r = await runSed('/two/a AFTER', myVfs.multi.txt);
       expect(r.data).toContain('two\nAFTER');
     });
 
     it('insert (i)', async () => {
-      const r = await runSed('/two/i BEFORE', myVfs["multi.txt"]);
+      const r = await runSed('/two/i BEFORE', myVfs.multi.txt);
       expect(r.data).toContain('BEFORE\ntwo');
     });
 
     it('change (c)', async () => {
-      const r = await runSed('/two/c REPLACED', myVfs["multi.txt"]);
+      const r = await runSed('/two/c REPLACED', myVfs.multi.txt);
       expect(r.data).toContain('REPLACED');
     });
   });
@@ -191,13 +238,18 @@ describe('Sed.js FULL Test Suite', () => {
     });
 
     it('D command partial delete', async () => {
-    const r = await runSed('N; D', 'a\nb\nc');
-    expect(r.data).toBe('c');
-  });
+      const r = await runSed('N; D', 'a\nb\nc');
+      expect(r.data).toBe('c');
+    });
 
     it('P prints partial', async () => {
       const r = await runSed('-n N; P', 'a\nb');
       expect(r.data).toContain('a');
+    });
+
+    it('processes substitution on every line of a multi-line string', async () => {
+      const r = await runSed('s/line/row/g', 'line one\nline two\nline three');
+      expect(r.data).toBe('row one\nrow two\nrow three');
     });
   });
 
@@ -213,6 +265,16 @@ describe('Sed.js FULL Test Suite', () => {
     it('missing file error', async () => {
       const r = await runSed('s/x/y/ nope.txt');
       expect(r.success).toBe(false);
+    });
+
+    it('reads from the virtual file system', async () => {
+      const r = await runSed('s/test/demo/ notes.txt');
+      expect(r.data).toContain('demo file');
+    });
+
+    it('throws or returns error for non-existent files', async () => {
+      const r = await runSed('s/foo/bar/ ghost.txt');
+      expect(r.error).toBe('sed: ghost.txt: No such file or directory');
     });
   });
 
@@ -243,13 +305,14 @@ describe('Sed.js FULL Test Suite', () => {
   });
 
   /* -----------------------------
-   * COMPLEX REAL-WORLD
+   * REAL-WORLD PIPELINES
    * ----------------------------- */
   describe('Real-world pipelines', () => {
     it('number lines', async () => {
       const r = await runSed('=; N; s/\\n/: /', 'a\nb');
-      expect(r.data).toContain('1\na: b'); 
+      expect(r.data).toContain('1\na: b');
     });
+
     it('duplicate lines', async () => {
       const r = await runSed('p', 'x');
       expect(r.data).toBe('x\nx');
@@ -261,5 +324,4 @@ describe('Sed.js FULL Test Suite', () => {
       expect(r.data).toBe('c\nb\na');
     });
   });
-
 });
