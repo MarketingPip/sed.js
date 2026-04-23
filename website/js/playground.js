@@ -2,7 +2,7 @@ import "../css/styles.css";
  
 import '../pages/playground.html';
 
-import { sed } from "../../src/index.js";
+import sed from "../../src/index.js";
  
 
         // Playground State
