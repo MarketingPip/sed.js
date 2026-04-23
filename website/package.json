@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "A Webpack 5 project with Tailwind CSS, PostCSS, and Lucide icons.",
   "scripts": {
-    "deploy": "webpack --mode production --config ./webpack.config.js && gh-pages -d dist"
+    "deploy": "webpack --mode production --config ./website/webpack.config.js && gh-pages -d dist"
   },
   "keywords": [],
   "author": "",
