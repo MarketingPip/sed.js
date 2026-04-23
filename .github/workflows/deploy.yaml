@@ -1,0 +1,61 @@
+name: Deploy Website to GitHub Pages
+
+on:
+  workflow_dispatch: # Allows manual triggering
+  
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout 🛎️
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ⚙️
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build Website 🏗️
+        working-directory: website
+        run: |
+          npm install
+          npm run deploy
+
+      # 3. Create Clean Staging & Force Jekyll Processing
+      - name: Prepare Final Files 📂
+        run: |
+          mkdir final_site
+          cp -r website/dist/* final_site/
+          
+          # THE CRITICAL FIX: Jekyll requires Front Matter (---) to process Liquid variables.
+          # This loops through all HTML files and adds empty Front Matter if not present.
+          for file in final_site/*.html; do
+            echo -e "---\n---\n$(cat "$file")" > "$file"
+          done
+
+      # 4. Build with Jekyll (Official Action)
+      - name: Build with Jekyll 💎
+        uses: actions/jekyll-build-pages@v1
+        with:
+          source: ./final_site/
+          destination: ./_site
+          # Providing the token here allows site.github variables to populate
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # 5. Upload artifact
+      - name: Upload artifact 🚀
+        uses: actions/upload-pages-artifact@v3
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+    steps:
+      - name: Deploy to GitHub Pages 🚀
+        uses: actions/deploy-pages@v4
