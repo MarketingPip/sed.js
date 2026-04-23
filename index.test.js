@@ -25,7 +25,6 @@ async function runSed(command, stdin = null) {
     } else {
       result = await sed(command, { stdin, shell: fakeShell });
     }
-    console.log('Result:', result);
     return result;
   } catch (err) {
     console.error('Error:', err.message);
