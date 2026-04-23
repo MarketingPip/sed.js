@@ -1,0 +1,16 @@
+{
+  "name": "sed-js-tests",
+  "version": "1.0.0",
+  "description": "Test sed.js with execa",
+  "main": "index.js",
+  "scripts": {
+    "test": "jest"
+  },
+  "dependencies": {
+    "execa": "^6.0.0",
+    "sed.js": "^1.0.0"
+  },
+  "devDependencies": {
+    "jest": "^29.0.0"
+  }
+}
