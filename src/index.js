@@ -814,7 +814,7 @@ async function processContent(content, commands, silent, options = {}) {
 
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
     const state = { ...createInitialState(totalLines, filename, rangeStates), patternSpace: lines[lineIndex], holdSpace, lastPattern, lineNumber: lineIndex + 1 };
-    const ctx = { lines, currentLineIndex: lineIndex };
+    const ctx = { lines, currentLineIndex: lineIndex, shell:options.shell };
 
     let cycleIterations = 0; state.linesConsumedInCycle = 0;
     do {
