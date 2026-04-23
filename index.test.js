@@ -27,7 +27,7 @@ async function runSed(command, stdin = null) {
     }
     return result;
   } catch (err) {
-    return err;
+    return { success: false, data: null, error: err.message };
   }
 }
 
@@ -117,8 +117,7 @@ describe('Sed.js Tests', () => {
     it('should throw or return error for non-existent files', async () => {
       const command = 's/foo/bar/ ghost.txt';
       const result = await runSed(command);
-      // Adjust this based on how your library handles missing files
-      expect(result).toBeUndefined(); 
+      expect(result.error).toBe('sed: ghost.txt: No such file or directory');
     });
   });
 
