@@ -304,6 +304,12 @@ describe('Sed.js FULL Test Suite', () => {
     });
   });
 
+  it("executes shell with 'e' flag (s///e)", async () => {
+    const r = await runSed("s/.*/&/e", "whoami");
+    expect(r.data.trim()).toBe("user");
+  });
+  
+
   /* -----------------------------
    * REAL-WORLD PIPELINES
    * ----------------------------- */
