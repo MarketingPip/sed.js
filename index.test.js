@@ -27,7 +27,7 @@ async function runSed(command, stdin = null) {
     }
     return result;
   } catch (err) {
-    console.error('Error:', err.message);
+    return err;
   }
 }
 
