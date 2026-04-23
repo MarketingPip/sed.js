@@ -5,7 +5,7 @@
   "description": "Test sed.js with execa",
   "main": "index.js",
   "scripts": {
-    "test": "jest"
+    "test": "node --experimental-vm-modules ./node_modules/.bin/jest"
   },
   "dependencies": {
     "execa": "^6.0.0"
