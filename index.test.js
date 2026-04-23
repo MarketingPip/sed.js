@@ -101,22 +101,22 @@ describe('Sed.js FULL Test Suite', () => {
    * ----------------------------- */
   describe('Addressing', () => {
     it('single line number', async () => {
-      const r = await runSed('2s/two/TWO/', myVfs.multi.txt);
+      const r = await runSed('2s/two/TWO/', myVfs['multi.txt']);
       expect(r.data).toBe("one\nTWO\nthree\nfour\nfive");
     });
 
     it('range addressing', async () => {
-      const r = await runSed('2,4s/.*/X/', myVfs.multi.txt);
+      const r = await runSed('2,4s/.*/X/', myVfs['multi.txt']);
       expect(r.data).toBe("one\nX\nX\nX\nfive");
     });
 
     it('regex address', async () => {
-      const r = await runSed('/three/s/.*/MATCH/', myVfs.multi.txt);
+      const r = await runSed('/three/s/.*/MATCH/', myVfs['multi.txt']);
       expect(r.data).toContain('MATCH');
     });
 
     it('negated address', async () => {
-      const r = await runSed('/three/!s/.*/NO/', myVfs.multi.txt);
+      const r = await runSed('/three/!s/.*/NO/', myVfs['multi.txt']);
       expect(r.data).toBe("NO\nNO\nthree\nNO\nNO");
     });
   });
@@ -173,12 +173,12 @@ describe('Sed.js FULL Test Suite', () => {
    * ----------------------------- */
   describe('Delete & Print', () => {
     it('delete matching lines', async () => {
-      const r = await runSed('/two/d', myVfs.multi.txt);
+      const r = await runSed('/two/d', myVfs['multi.txt']);
       expect(r.data).not.toContain('two');
     });
 
     it('print only matching (-n + p)', async () => {
-      const r = await runSed('-n /two/p', myVfs.multi.txt);
+      const r = await runSed('-n /two/p', myVfs['multi.txt']);
       expect(r.data.trim()).toBe('two');
     });
 
@@ -193,17 +193,17 @@ describe('Sed.js FULL Test Suite', () => {
    * ----------------------------- */
   describe('Text Commands', () => {
     it('append (a)', async () => {
-      const r = await runSed('/two/a AFTER', myVfs.multi.txt);
+      const r = await runSed('/two/a AFTER', myVfs['multi.txt']);
       expect(r.data).toContain('two\nAFTER');
     });
 
     it('insert (i)', async () => {
-      const r = await runSed('/two/i BEFORE', myVfs.multi.txt);
+      const r = await runSed('/two/i BEFORE', myVfs['multi.txt']);
       expect(r.data).toContain('BEFORE\ntwo');
     });
 
     it('change (c)', async () => {
-      const r = await runSed('/two/c REPLACED', myVfs.multi.txt);
+      const r = await runSed('/two/c REPLACED', myVfs['multi.txt']);
       expect(r.data).toContain('REPLACED');
     });
   });
