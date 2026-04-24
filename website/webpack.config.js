@@ -1,7 +1,7 @@
 const path = require('path');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
 const MiniCssExtractPlugin = require('mini-css-extract-plugin');
-
+const CopyPlugin = require('copy-webpack-plugin'); 
 module.exports = (env, argv) => {
   const isProd = argv.mode === 'production';
 
@@ -51,9 +51,22 @@ module.exports = (env, argv) => {
     },
     resolve: {
       modules: [path.resolve(__dirname, 'node_modules'), 'node_modules'],
-      extensions: ['.js', '.json', '.wasm'],
+      extensions: ['.js', '.json', '.wasm', '.woff'],
     },
     plugins: [
+       new CopyPlugin({
+      patterns: [
+        {
+          from: 'node_modules/@fortawesome/fontawesome-free/css/all.min.css',
+          to: '../css/font-awesome.css', // The custom output path
+        },
+        {
+          from: 'node_modules/@fortawesome/fontawesome-free/webfonts',
+          to: '../webfonts', // Copy the webfonts as well
+        },
+      ],
+    }),
+      
       // Create HtmlWebpackPlugin instances dynamically for each HTML page
       ...htmlPages.map(page => new HtmlWebpackPlugin({
         template: path.resolve(__dirname, page.template),
