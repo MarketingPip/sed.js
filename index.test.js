@@ -1,5 +1,10 @@
 import sed from './src/index.js';
 import { execa } from 'execa';
+import fs from 'fs/promises';
+import path from 'path';
+import os from 'os';
+
+
 const myVfs = {
   "notes.txt": "Hello, this is a test file containing the word hello.",
   "multi.txt": "one\ntwo\nthree\nfour\nfive",
@@ -31,44 +36,58 @@ async function runSed(command, stdin = null) {
 export { runSed };
 
 
+
 describe('Sed.js Tests vs System Sed', () => {
-  
-  // Helper to get output from the real 'sed' installed on the OS
-  const getSystemSedOutput = async (args, stdin = '') => {
-    // We use the shell version of sed
-    const { stdout } = await execa('sed', args, { input: stdin });
-    return stdout;
+  let tmpDir;
+
+  // Setup: Create real files on disk that match your myVfs
+  beforeAll(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sed-test-'));
+    await fs.writeFile(path.join(tmpDir, 'notes.txt'), "Hello, this is a test file containing the word hello.");
+    // Add other files if needed
+  });
+
+  // Cleanup
+  afterAll(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  const getSystemSedOutput = async (args, stdin = null) => {
+    try {
+      // Logic: If we have stdin, pass it. If not, don't pass 'input' to avoid EPIPE.
+      const options = stdin ? { input: stdin } : {};
+      const { stdout } = await execa('sed', args, options);
+      return stdout;
+    } catch (error) {
+      return error.stderr;
+    }
   };
 
   it('should replace "hello" with "hi" and match system sed', async () => {
     const command = 's/hello/hi/';
-    const filePath = 'notes.txt';
+    const fileName = 'notes.txt';
+    const fullPath = path.join(tmpDir, fileName);
     
-    // 1. Get output from your port
-    const result = await runSed(`${command} ${filePath}`);
+    // 1. Run your port (uses myVfs internally)
+    const response = await runSed(`${command} ${fileName}`);
     
-    // 2. Get output from real sed
-    const expected = await getSystemSedOutput([command, filePath]);
+    // 2. Run system sed (uses real temp file)
+    const expected = await getSystemSedOutput([command, fullPath]);
     
-    // 3. Compare them
-    expect(result).toBe(expected);
+    // 3. Compare (extracting .data from your response)
+    expect(response.data).toBe(expected);
   });
 
   it('should handle stdin correctly and match system sed', async () => {
     const command = 's/test/TEST/';
     const stdin = 'This is a test string.';
     
-    // 1. Get output from your port
-    const result = await runSed(command, stdin);
-    
-    // 2. Get output from real sed
+    const response = await runSed(command, stdin);
     const expected = await getSystemSedOutput([command], stdin);
     
-    // 3. Compare them
-    expect(result).toBe(expected);
-    expect(result).toBe('This is a TEST string.'); // Sanity check
+    expect(response.data).toBe(expected);
+    expect(response.data).toBe('This is a TEST string.');
   });
-
 });
 
 describe('Sed.js FULL Test Suite', () => {
