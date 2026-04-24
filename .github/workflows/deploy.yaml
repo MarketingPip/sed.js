@@ -23,7 +23,7 @@ jobs:
       - name: Build Website 🏗️
         working-directory: website
         run: |
-          npm install copy-webpack-plugin @fullhuman/postcss-purgecss
+          npm install copy-webpack-plugin @fullhuman/postcss-purgecss @fortawesome/fontawesome-free
           npm install
           npm run deploy
 
