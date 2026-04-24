@@ -39,7 +39,13 @@ module.exports = (env, argv) => {
         },
         {
           test: /\.html$/i,
-          loader: 'html-loader',
+          loader: "html-loader",
+          options: {
+            // This prevents the loader from encoding entities like & to &amp;
+            minimize: {
+              decodeEntities: false,
+            },
+          },
         },
       ],
     },
