@@ -4,6 +4,11 @@ import '../pages/playground.html';
 import sed from "../../src/index.js";
  
 
+function stdinActive(){
+  const checkbox = document.getElementById('enableStdin');
+  return checkbox.checked;
+}
+
         // Playground State
         let myVfs = {
             "notes.txt": "hello universe",
@@ -76,13 +81,11 @@ world foo hello`
               }
                
               let result;
-              if(!_stdin){
+              if(!stdinActive){
                 result = await sed(command, { vfs: myVfs, shell:hello});
               }else{
                 result = await sed(command, { stdin: _stdin, shell:hello});
               } 
-              
-               console.log(result.trim())
               
               //await sed(command)
                 
