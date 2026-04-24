@@ -54,7 +54,7 @@ module.exports = (env, argv) => {
         patterns: [
           // REMOVED: all.min.css copy (we import it in JS now)
           {
-            from: 'node_modules/@fortawesome/fontawesome-free/webfonts',
+            from: path.resolve(__dirname, 'node_modules/@fortawesome/fontawesome-free/webfonts'),
             to: path.resolve(__dirname, 'dist/webfonts'), 
           },
         ],
