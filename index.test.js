@@ -1,5 +1,5 @@
 import sed from './src/index.js';
-
+import { execa } from 'execa';
 const myVfs = {
   "notes.txt": "Hello, this is a test file containing the word hello.",
   "multi.txt": "one\ntwo\nthree\nfour\nfive",
@@ -29,6 +29,47 @@ async function runSed(command, stdin = null) {
 }
 
 export { runSed };
+
+
+describe('Sed.js Tests vs System Sed', () => {
+  
+  // Helper to get output from the real 'sed' installed on the OS
+  const getSystemSedOutput = async (args, stdin = '') => {
+    // We use the shell version of sed
+    const { stdout } = await execa('sed', args, { input: stdin });
+    return stdout;
+  };
+
+  it('should replace "hello" with "hi" and match system sed', async () => {
+    const command = 's/hello/hi/';
+    const filePath = 'notes.txt';
+    
+    // 1. Get output from your port
+    const result = await runSed(`${command} ${filePath}`);
+    
+    // 2. Get output from real sed
+    const expected = await getSystemSedOutput([command, filePath]);
+    
+    // 3. Compare them
+    expect(result).toBe(expected);
+  });
+
+  it('should handle stdin correctly and match system sed', async () => {
+    const command = 's/test/TEST/';
+    const stdin = 'This is a test string.';
+    
+    // 1. Get output from your port
+    const result = await runSed(command, stdin);
+    
+    // 2. Get output from real sed
+    const expected = await getSystemSedOutput([command], stdin);
+    
+    // 3. Compare them
+    expect(result).toBe(expected);
+    expect(result).toBe('This is a TEST string.'); // Sanity check
+  });
+
+});
 
 describe('Sed.js FULL Test Suite', () => {
   /* -----------------------------
