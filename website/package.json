@@ -4,7 +4,7 @@
   "description": "A Webpack 5 project with Tailwind CSS, PostCSS, and Lucide icons.",
   "main": "js/main.js",
   "scripts": {
-    "build:ghpages": "webpack --mode production --config ./webpack.config.js",
+    "build:ghpages": "webpack --mode production --config ./webpack.config.js && purgecss --content 'dist/**/*.html' 'dist/**/*.js' --css dist/css/font-awesome.css --output dist/css/", 
     "deploy": "webpack --mode production --config ./webpack.config.js"
   },
   "keywords": [],
