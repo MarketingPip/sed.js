@@ -95,3 +95,31 @@ world foo hello`
 
         // Init
         updateVFSDisplay();
+
+
+
+ document.addEventListener('DOMContentLoaded', () => {
+  const checkbox = document.getElementById('enableStdin');
+  const stdin = document.getElementById('stdin');
+  const statusLabel = document.getElementById('statusLabel');
+
+  checkbox.addEventListener('change', (e) => {
+    const isActive = e.target.checked;
+    
+    // Logic state
+    stdin.readOnly = !isActive;
+    
+    // UI Visual states
+    if (isActive) {
+      stdin.classList.remove('opacity-40', 'grayscale', 'pointer-events-none', 'text-indigo-300/50');
+      stdin.classList.add('text-indigo-300', 'border-slate-700');
+      statusLabel.classList.replace('text-slate-600', 'text-indigo-400');
+      stdin.focus();
+    } else {
+      stdin.classList.add('opacity-40', 'grayscale', 'pointer-events-none', 'text-indigo-300/50');
+      stdin.classList.remove('text-indigo-300', 'border-slate-700');
+      statusLabel.classList.replace('text-indigo-400', 'text-slate-600');
+    }
+  });
+});
+
