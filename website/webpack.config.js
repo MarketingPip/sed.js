@@ -87,7 +87,7 @@ module.exports = (env, argv) => {
           ...glob.sync(path.join(__dirname, 'js/**/*.js'), { nodir: true }),
         ],
         only: ['fontawesome'], // Crucial: Restricts PurgeCSS to ONLY your Font Awesome chunk
-        safelist:[/^fa-/, /^fas$/, /^far$/, /^fab$/] // Prevents core structure classes from being purged
+        safelist:['fa', 'fas', 'far', 'fab', 'fa-solid', 'fa-regular', 'fa-brands']
       })
     ].filter(Boolean), // .filter(Boolean) prevents the plugin from crashing in development mode
     mode: isProd ? 'production' : 'development',
