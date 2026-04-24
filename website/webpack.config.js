@@ -58,11 +58,11 @@ module.exports = (env, argv) => {
       patterns: [
         {
           from: 'node_modules/@fortawesome/fontawesome-free/css/all.min.css',
-          to: '../css/font-awesome.css', // The custom output path
+          to: path.resolve(__dirname, 'css/font-awesome.css'), // The custom output path
         },
         {
           from: 'node_modules/@fortawesome/fontawesome-free/webfonts',
-          to: '../webfonts', // Copy the webfonts as well
+           to: path.resolve(__dirname, 'webfonts'), // The custom output path
         },
       ],
     }),
