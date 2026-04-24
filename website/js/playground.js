@@ -101,7 +101,7 @@ world foo hello`
 
 
 
- document.addEventListener('DOMContentLoaded', () => {
+ 
   const checkbox = document.getElementById('enableStdin');
   const stdin = document.getElementById('stdin');
   const statusLabel = document.getElementById('statusLabel');
@@ -124,5 +124,5 @@ world foo hello`
       statusLabel.classList.replace('text-indigo-400', 'text-slate-600');
     }
   });
-});
+ 
 
