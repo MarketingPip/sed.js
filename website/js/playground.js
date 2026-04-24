@@ -1,5 +1,5 @@
 import "../css/styles.css";
- 
+ import '@fortawesome/fontawesome-free/css/all.min.css';
 import '../pages/playground.html';
 
 import sed from "../../src/index.js";
