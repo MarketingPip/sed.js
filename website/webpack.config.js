@@ -22,7 +22,7 @@ module.exports = (env, argv) => {
       path: path.resolve(__dirname, 'dist'),
       filename: '[name].[contenthash].js',
       clean: true,
-      // Ensure the publicPath is set so CSS knows where to find fonts
+      // Setting publicPath to '' (auto) ensures relative links work on GitHub Pages subfolders
       publicPath: '', 
     },
     devtool: isProd ? false : 'source-map',
@@ -33,8 +33,16 @@ module.exports = (env, argv) => {
           use: [
             isProd ? MiniCssExtractPlugin.loader : 'style-loader',
             'css-loader',
-            'postcss-loader', // This will now trigger PurgeCSS
+            'postcss-loader', 
           ],
+        },
+        // ADDED THIS RULE: This handles the font files referenced inside the CSS
+        {
+          test: /\.(woff|woff2|eot|ttf|otf)$/i,
+          type: 'asset/resource',
+          generator: {
+            filename: 'webfonts/[name][ext][query]',
+          },
         },
         {
           test: /\.html$/i,
@@ -52,7 +60,6 @@ module.exports = (env, argv) => {
     plugins: [
       new CopyPlugin({
         patterns: [
-          // REMOVED: all.min.css copy (we import it in JS now)
           {
             from: path.resolve(__dirname, 'node_modules/@fortawesome/fontawesome-free/webfonts'),
             to: path.resolve(__dirname, 'dist/webfonts'), 
@@ -67,7 +74,8 @@ module.exports = (env, argv) => {
       })),
 
       new MiniCssExtractPlugin({
-        filename: 'css/[name].[contenthash].css',
+        // FIXED: Putting CSS at root of dist so it finds webfonts/ correctly
+        filename: '[name].[contenthash].css', 
       }),
     ],
     mode: isProd ? 'production' : 'development',
