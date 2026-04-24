@@ -28,7 +28,7 @@ jobs:
         run: |
           npm install copy-webpack-plugin @fullhuman/postcss-purgecss @fortawesome/fontawesome-free
           npm install --include=dev
-          npx webpack --mode production --config ./website/webpack.config.js
+          npm run deploy
 
       # 3. Create Clean Staging & Force Jekyll Processing
       - name: Prepare Final Files 📂
