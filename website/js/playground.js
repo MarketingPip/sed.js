@@ -103,7 +103,7 @@ world foo hello`
 
  
   const checkbox = document.getElementById('enableStdin');
-  const stdin = document.getElementById('stdin');
+ 
   const statusLabel = document.getElementById('statusLabel');
 
   checkbox.addEventListener('change', (e) => {
