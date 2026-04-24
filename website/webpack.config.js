@@ -6,25 +6,21 @@ const CopyPlugin = require('copy-webpack-plugin');
 module.exports = (env, argv) => {
   const isProd = argv.mode === 'production';
 
-  const entries = {
-    index: path.resolve(__dirname, 'js/main.js'),
-    playground: path.resolve(__dirname, 'js/playground.js'),
-  };
-
-  const htmlPages = [
-    { template: 'pages/index.html', filename: 'index.html', entry: 'index' },
-    { template: 'pages/playground.html', filename: 'playground.html', entry: 'playground' },
-  ];
-
   return {
-    entry: entries,
+    entry: {
+      index: './js/main.js',
+      playground: './js/playground.js',
+    },
+
     output: {
       path: path.resolve(__dirname, 'dist'),
       filename: '[name].[contenthash].js',
       clean: true,
       publicPath: '',
     },
+
     devtool: isProd ? false : 'source-map',
+
     module: {
       rules: [
         {
@@ -37,11 +33,9 @@ module.exports = (env, argv) => {
         },
       ],
     },
-    resolve: {
-      modules: [path.resolve(__dirname, 'node_modules'), 'node_modules'],
-      extensions: ['.js', '.json', '.wasm', '.woff'],
-    },
+
     plugins: [
+      // ✅ Copy Font Awesome separately
       new CopyPlugin({
         patterns: [
           {
@@ -55,16 +49,29 @@ module.exports = (env, argv) => {
         ],
       }),
 
-      ...htmlPages.map(page => new HtmlWebpackPlugin({
-        template: path.resolve(__dirname, page.template),
-        filename: page.filename,
-        chunks: [page.entry],
-      })),
+      // ✅ HTML pages
+      new HtmlWebpackPlugin({
+        template: './pages/index.html',
+        filename: 'index.html',
+        chunks: ['index'],
+      }),
 
+      new HtmlWebpackPlugin({
+        template: './pages/playground.html',
+        filename: 'playground.html',
+        chunks: ['playground'],
+      }),
+
+      // ✅ Extract Tailwind CSS
       new MiniCssExtractPlugin({
         filename: 'styles.[contenthash].css',
       }),
     ],
+
+    resolve: {
+      extensions: ['.js', '.json'],
+    },
+
     mode: isProd ? 'production' : 'development',
   };
 };
