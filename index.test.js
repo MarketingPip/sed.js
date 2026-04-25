@@ -4,6 +4,12 @@ import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 
+let tmpDir;
+let notesPath;
+let multiPath;
+let emptyPath;
+let numbersPath;
+
 const myVfs = {
   'notes.txt': 'Hello, this is a test file containing the word hello.',
   'multi.txt': 'one\ntwo\nthree\nfour\nfive',
@@ -81,11 +87,7 @@ async function expectSameSedOutput({
 export { runSed };
 
 describe('Sed.js Tests vs System Sed', () => {
-  let tmpDir;
-  let notesPath;
-  let multiPath;
-  let emptyPath;
-  let numbersPath;
+
 
   beforeAll(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sed-test-'));
