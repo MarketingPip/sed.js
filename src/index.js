@@ -221,13 +221,18 @@ class SedLexer {
   readSubstitute(startLine, startColumn) {
     const delimiter = this.advance();
     if (!delimiter || delimiter === "\n") return { type: SedTokenType.ERROR, value: "s", line: startLine, column: startColumn };
+    
     let pattern = ""; let inBracket = false;
     while (this.pos < this.input.length) {
       const ch = this.peek();
       if (ch === delimiter && !inBracket) break;
       if (ch === "\\") {
         this.advance();
-        if (this.pos < this.input.length && this.peek() !== "\n") { const escaped = this.peek(); if (escaped === delimiter && !inBracket) pattern += this.advance(); else { pattern += "\\"; pattern += this.advance(); } }
+        if (this.pos < this.input.length && this.peek() !== "\n") { 
+          const escaped = this.peek(); 
+          if (escaped === delimiter && !inBracket) pattern += this.advance(); 
+          else { pattern += "\\"; pattern += this.advance(); } 
+        }
         else { pattern += "\\"; }
       }
       else if (ch === "\n") { break; }
@@ -235,8 +240,10 @@ class SedLexer {
       else if (ch === "]" && inBracket) { inBracket = false; pattern += this.advance(); }
       else { pattern += this.advance(); }
     }
+    
     if (this.peek() !== delimiter) return { type: SedTokenType.ERROR, value: "unterminated substitution pattern", line: startLine, column: startColumn };
     this.advance();
+    
     let replacement = "";
     while (this.pos < this.input.length && this.peek() !== delimiter) {
       if (this.peek() === "\\") {
@@ -248,17 +255,33 @@ class SedLexer {
         } else { replacement += "\\"; }
       } else if (this.peek() === "\n") { break; } else { replacement += this.advance(); }
     }
+    
     if (this.peek() === delimiter) this.advance();
+    
     let flags = "";
-    while (this.pos < this.input.length) { const ch = this.peek(); if (["g", "i", "p", "I", "e"].includes(ch) || this.isDigit(ch)) flags += this.advance(); else break; }
+    while (this.pos < this.input.length) { 
+      const ch = this.peek(); 
+      if (["g", "i", "p", "I", "e"].includes(ch) || this.isDigit(ch)) flags += this.advance(); 
+      else break; 
+    }
+    
     let nthOccurrence;
-    const numMatch = flags.match(/(\d+)/); if (numMatch) nthOccurrence = parseInt(numMatch[1], 10);
+    const numMatch = flags.match(/(\d+)/); 
+    if (numMatch) nthOccurrence = parseInt(numMatch[1], 10);
+    
     return {
-      type: SedTokenType.SUBSTITUTE, value: `s${delimiter}${pattern}${delimiter}${replacement}${delimiter}${flags}`,
-      pattern: pattern || "", replacement: replacement || "", flags,
-      global: flags.includes("g") || flags.includes("I"), ignoreCase: flags.includes("i") || flags.includes("I"),
-      printOnMatch: flags.includes("p"), executeShell: flags.includes("e"), nthOccurrence,
-      line: startLine, column: startColumn
+      type: SedTokenType.SUBSTITUTE, 
+      value: `s${delimiter}${pattern}${delimiter}${replacement}${delimiter}${flags}`,
+      pattern: pattern || "", 
+      replacement: replacement || "", 
+      flags,
+      global: flags.includes("g"), // Fix: Removed "I" flag from forcing a global replacement
+      ignoreCase: flags.includes("i") || flags.includes("I"),
+      printOnMatch: flags.includes("p"), 
+      executeShell: flags.includes("e"), 
+      nthOccurrence,
+      line: startLine, 
+      column: startColumn
     };
   }
   readTransliterate(startLine, startColumn) {
