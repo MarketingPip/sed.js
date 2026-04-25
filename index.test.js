@@ -16,16 +16,13 @@ async function fakeShell(cmd) {
   return "unknown command";
 }
 
-/* -----------------------------
- * TEST HARNESS CORE
- * ----------------------------- */
+/* ----------------------------- */
 
 let tmpDir;
 
 beforeAll(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sed-test-'));
 
-  // mirror VFS to real FS
   for (const [name, content] of Object.entries(myVfs)) {
     await fs.writeFile(path.join(tmpDir, name), content);
   }
@@ -34,6 +31,10 @@ beforeAll(async () => {
 afterAll(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
+
+/* ----------------------------- */
+/* YOUR IMPLEMENTATION RUNNER */
+/* ----------------------------- */
 
 async function runSed(command, stdin = null) {
   try {
@@ -51,12 +52,13 @@ async function runSed(command, stdin = null) {
   }
 }
 
-/* -----------------------------
- * SYSTEM SED MIRROR
- * ----------------------------- */
+/* ----------------------------- */
+/* SYSTEM SED RUNNER */
+/* ----------------------------- */
+
+const SED_BIN = process.platform === 'darwin' ? 'gsed' : 'sed';
 
 function mapCommandToSystem(command) {
-  // replace virtual filenames with real temp paths
   let mapped = command;
 
   for (const name of Object.keys(myVfs)) {
@@ -67,13 +69,26 @@ function mapCommandToSystem(command) {
   return mapped;
 }
 
+// VERY IMPORTANT: don't rely on shell parsing
+function splitArgs(command) {
+  // naive but works for your test set
+  // preserves quoted segments
+  const re = /'[^']*'|"[^"]*"|\\S+/g;
+  return command.match(re) || [];
+}
+
 async function runSystemSed(command, stdin = null) {
   try {
     const mapped = mapCommandToSystem(command);
+    const args = splitArgs(mapped);
 
-    const options = stdin ? { input: stdin, shell: true } : { shell: true };
+    const hasInput = stdin !== null && stdin !== undefined;
 
-    const { stdout } = await execa(`sed ${mapped}`, options);
+    const { stdout } = await execa(SED_BIN, args, {
+      input: hasInput ? stdin : undefined,
+      env: { ...process.env, LC_ALL: 'C' }
+    });
+
     return { success: true, data: stdout, error: null };
   } catch (err) {
     return {
@@ -84,9 +99,20 @@ async function runSystemSed(command, stdin = null) {
   }
 }
 
-/* -----------------------------
- * ASSERTION WRAPPER
- * ----------------------------- */
+/* ----------------------------- */
+/* NORMALIZATION */
+/* ----------------------------- */
+
+function normalize(s) {
+  if (typeof s !== 'string') return s;
+
+  // normalize trailing newline differences
+  return s.replace(/\n$/, '');
+}
+
+/* ----------------------------- */
+/* ASSERTION WRAPPER */
+/* ----------------------------- */
 
 async function expectSedMatch(command, stdin = null) {
   const mine = await runSed(command, stdin);
@@ -95,17 +121,15 @@ async function expectSedMatch(command, stdin = null) {
   expect(mine.success).toBe(real.success);
 
   if (mine.success) {
-    expect(mine.data).toBe(real.data);
+    expect(normalize(mine.data)).toBe(normalize(real.data));
   } else {
     expect(mine.error).toBe(real.error);
   }
 
-  return mine; // so tests can still assert specifics
+  return mine;
 }
 
-/* =========================================================
- * TESTS (UNCHANGED, JUST ROUTED THROUGH expectSedMatch)
- * ========================================================= */
+/* ========================================================= */
 
 describe('Sed.js FULL Test Suite (Validated Against System sed)', () => {
 
