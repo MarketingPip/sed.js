@@ -6,7 +6,7 @@
 // 1. Regex Utilities
 // ==========================================
 
-const POSIX_CLASSES = new Map([["alnum", "a-zA-Z0-9"],["alpha", "a-zA-Z"],["ascii", "\\x00-\\x7F"], ["blank", " \\t"],["cntrl", "\\x00-\\x1F\\x7F"], ["digit", "0-9"],["graph", "!-~"],["lower", "a-z"], ["print", " -~"],["punct", "!-/:-@\\[-`{-~"],["space", " \\t\\n\\r\\f\\v"], ["upper", "A-Z"],["word", "a-zA-Z0-9_"],["xdigit", "0-9A-Fa-f"]
+const POSIX_CLASSES = new Map([["alnum", "a-zA-Z0-9"],["alpha", "a-zA-Z"],["ascii", "\\x00-\\x7F"], ["blank", " \\t"],["cntrl", "\\x00-\\x1F\\x7F"], ["digit", "0-9"],["graph", "!-~"], ["lower", "a-z"], ["print", " -~"],["punct", "!-/:-@\\[-`{-~"],["space", " \\t\\n\\r\\f\\v"],["upper", "A-Z"], ["word", "a-zA-Z0-9_"],["xdigit", "0-9A-Fa-f"]
 ]);
 
 function breToEre(pattern) {
@@ -221,18 +221,13 @@ class SedLexer {
   readSubstitute(startLine, startColumn) {
     const delimiter = this.advance();
     if (!delimiter || delimiter === "\n") return { type: SedTokenType.ERROR, value: "s", line: startLine, column: startColumn };
-    
     let pattern = ""; let inBracket = false;
     while (this.pos < this.input.length) {
       const ch = this.peek();
       if (ch === delimiter && !inBracket) break;
       if (ch === "\\") {
         this.advance();
-        if (this.pos < this.input.length && this.peek() !== "\n") { 
-          const escaped = this.peek(); 
-          if (escaped === delimiter && !inBracket) pattern += this.advance(); 
-          else { pattern += "\\"; pattern += this.advance(); } 
-        }
+        if (this.pos < this.input.length && this.peek() !== "\n") { const escaped = this.peek(); if (escaped === delimiter && !inBracket) pattern += this.advance(); else { pattern += "\\"; pattern += this.advance(); } }
         else { pattern += "\\"; }
       }
       else if (ch === "\n") { break; }
@@ -240,10 +235,8 @@ class SedLexer {
       else if (ch === "]" && inBracket) { inBracket = false; pattern += this.advance(); }
       else { pattern += this.advance(); }
     }
-    
     if (this.peek() !== delimiter) return { type: SedTokenType.ERROR, value: "unterminated substitution pattern", line: startLine, column: startColumn };
     this.advance();
-    
     let replacement = "";
     while (this.pos < this.input.length && this.peek() !== delimiter) {
       if (this.peek() === "\\") {
@@ -255,33 +248,17 @@ class SedLexer {
         } else { replacement += "\\"; }
       } else if (this.peek() === "\n") { break; } else { replacement += this.advance(); }
     }
-    
     if (this.peek() === delimiter) this.advance();
-    
     let flags = "";
-    while (this.pos < this.input.length) { 
-      const ch = this.peek(); 
-      if (["g", "i", "p", "I", "e"].includes(ch) || this.isDigit(ch)) flags += this.advance(); 
-      else break; 
-    }
-    
+    while (this.pos < this.input.length) { const ch = this.peek(); if (["g", "i", "p", "I", "e"].includes(ch) || this.isDigit(ch)) flags += this.advance(); else break; }
     let nthOccurrence;
-    const numMatch = flags.match(/(\d+)/); 
-    if (numMatch) nthOccurrence = parseInt(numMatch[1], 10);
-    
+    const numMatch = flags.match(/(\d+)/); if (numMatch) nthOccurrence = parseInt(numMatch[1], 10);
     return {
-      type: SedTokenType.SUBSTITUTE, 
-      value: `s${delimiter}${pattern}${delimiter}${replacement}${delimiter}${flags}`,
-      pattern: pattern || "", 
-      replacement: replacement || "", 
-      flags,
-      global: flags.includes("g"), // Fix: Removed "I" flag from forcing a global replacement
-      ignoreCase: flags.includes("i") || flags.includes("I"),
-      printOnMatch: flags.includes("p"), 
-      executeShell: flags.includes("e"), 
-      nthOccurrence,
-      line: startLine, 
-      column: startColumn
+      type: SedTokenType.SUBSTITUTE, value: `s${delimiter}${pattern}${delimiter}${replacement}${delimiter}${flags}`,
+      pattern: pattern || "", replacement: replacement || "", flags,
+      global: flags.includes("g") || flags.includes("I"), ignoreCase: flags.includes("i") || flags.includes("I"),
+      printOnMatch: flags.includes("p"), executeShell: flags.includes("e"), nthOccurrence,
+      line: startLine, column: startColumn
     };
   }
   readTransliterate(startLine, startColumn) {
@@ -474,10 +451,10 @@ function createInitialState(totalLines, filename, rangeStates) {
   return {
     patternSpace: "", holdSpace: "", lineNumber: 0, totalLines,
     deleted: false, printed: false, quit: false, quitSilent: false,
-    exitCode: undefined, errorMessage: undefined, appendBuffer:[],
+    exitCode: undefined, errorMessage: undefined, appendBuffer: [],
     substitutionMade: false, lineNumberOutput: [], nCommandOutput:[],
     restartCycle: false, inDRestartedCycle: false, currentFilename: filename,
-    pendingFileReads: [], pendingFileWrites:[], rangeStates: rangeStates || new Map(), linesConsumedInCycle: 0
+    pendingFileReads:[], pendingFileWrites:[], rangeStates: rangeStates || new Map(), linesConsumedInCycle: 0
   };
 }
 
@@ -696,18 +673,21 @@ async function executeCommand(cmd, state, shell) {
       else if (rawPattern !== "") state.lastPattern = rawPattern;
       const pattern = normalizeForJs(cmd.extendedRegex ? rawPattern : breToEre(rawPattern));
 
+      let execRegex, testRegex;
       try {
-        const execRegex = new RegExp(pattern, "g" + (cmd.ignoreCase ? "i" : ""));
-        const testRegex = new RegExp(pattern, cmd.ignoreCase ? "i" : "");
-        if (testRegex.test(state.patternSpace)) {
-          const { result, matchedAny } = await doAsyncReplace(state.patternSpace, execRegex, cmd, shell);
-          if (matchedAny) {
-            state.substitutionMade = true;
-            state.patternSpace = result;
-            if (cmd.printOnMatch) state.lineNumberOutput.push(state.patternSpace);
-          }
+        execRegex = new RegExp(pattern, "g" + (cmd.ignoreCase ? "i" : ""));
+        testRegex = new RegExp(pattern, cmd.ignoreCase ? "i" : "");
+      } catch (e) { break; } // skip invalid regexp
+
+      if (testRegex.test(state.patternSpace)) {
+        // Scoped try-catch prevents JS runtime errors from silently failing substitutions
+        const { result, matchedAny } = await doAsyncReplace(state.patternSpace, execRegex, cmd, shell);
+        if (matchedAny) {
+          state.substitutionMade = true;
+          state.patternSpace = result;
+          if (cmd.printOnMatch) state.lineNumberOutput.push(state.patternSpace);
         }
-      } catch (e) { /* ignore */ }
+      }
       break;
     }
     case "print": state.lineNumberOutput.push(state.patternSpace); break;
@@ -726,7 +706,7 @@ async function executeCommand(cmd, state, shell) {
     case "insert": state.appendBuffer.unshift(`__INSERT__${cmd.text}`); break;
     case "change": state.deleted = true; state.changedText = cmd.text; break;
     case "hold": state.holdSpace = state.patternSpace; break;
-    case "holdAppend": state.holdSpace = state.holdSpace ? `${state.holdSpace}\n${state.patternSpace}` : state.patternSpace; break;
+    case "holdAppend": state.holdSpace += `\n${state.patternSpace}`; break;
     case "get": state.patternSpace = state.holdSpace; break;
     case "getAppend": state.patternSpace += `\n${state.holdSpace}`; break;
     case "exchange": { const temp = state.patternSpace; state.patternSpace = state.holdSpace; state.holdSpace = temp; break; }
