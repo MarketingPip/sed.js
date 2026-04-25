@@ -1,7 +1,12 @@
 import {SedLexer, SedTokenType} from "./lexer.js";
 
+
+// ==========================================
+// 3. Parser
+// ==========================================
+
 export class SedParser {
-  constructor(scripts, extendedRegex = false) { this.scripts = scripts; this.extendedRegex = extendedRegex; this.tokens = []; this.pos = 0; }
+  constructor(scripts, extendedRegex = false) { this.scripts = scripts; this.extendedRegex = extendedRegex; this.tokens =[]; this.pos = 0; }
   parse() {
     const allCommands =[];
     for (const script of this.scripts) {
@@ -29,13 +34,13 @@ export class SedParser {
     const token = this.peek();
     switch (token.type) {
       case SedTokenType.COMMAND: return this.parseSimpleCommand(token, address);
-      case SedTokenType.SUBSTITUTE: return this.parseSubstituteFromToken(token, address);
-      case SedTokenType.TRANSLITERATE: return this.parseTransliterateFromToken(token, address);
+      case SedTokenType.SUBSTITUTE: this.advance(); return { command: { ...token, address, extendedRegex: this.extendedRegex } };
+      case SedTokenType.TRANSLITERATE: this.advance(); return { command: { type: "transliterate", address, source: token.source, dest: token.dest } };
       case SedTokenType.LABEL_DEF: this.advance(); return { command: { type: "label", name: token.label || "" } };
       case SedTokenType.BRANCH: this.advance(); return { command: { type: "branch", address, label: token.label } };
       case SedTokenType.BRANCH_ON_SUBST: this.advance(); return { command: { type: "branchOnSubst", address, label: token.label } };
       case SedTokenType.BRANCH_ON_NO_SUBST: this.advance(); return { command: { type: "branchOnNoSubst", address, label: token.label } };
-      case SedTokenType.TEXT_CMD: this.advance(); return this.parseTextCommand(token, address);
+      case SedTokenType.TEXT_CMD: this.advance(); return { command: { type: token.value === "a" ? "append" : token.value === "i" ? "insert" : "change", address, text: token.text } };
       case SedTokenType.FILE_READ: this.advance(); return { command: { type: "readFile", address, filename: token.filename || "" } };
       case SedTokenType.FILE_READ_LINE: this.advance(); return { command: { type: "readFileLine", address, filename: token.filename || "" } };
       case SedTokenType.FILE_WRITE: this.advance(); return { command: { type: "writeFile", address, filename: token.filename || "" } };
@@ -59,29 +64,6 @@ export class SedParser {
     if (map[cmd]) return { command: { type: map[cmd], address } };
     return { command: null, error: `unknown command: ${cmd}` };
   }
-  parseSubstituteFromToken(token, address) {
-    this.advance(); const flags = token.flags || ""; let nthOccurrence;
-    const numMatch = flags.match(/(\d+)/); if (numMatch) nthOccurrence = parseInt(numMatch[1], 10);
-    return {
-      command: {
-        type: "substitute", address, pattern: token.pattern || "", replacement: token.replacement || "",
-        global: flags.includes("g") || flags.includes("I"), ignoreCase: flags.includes("i") || flags.includes("I"),
-        printOnMatch: flags.includes("p"), nthOccurrence, extendedRegex: this.extendedRegex
-      }
-    };
-  }
-  parseTransliterateFromToken(token, address) {
-    this.advance(); const source = token.source || ""; const dest = token.dest || "";
-    if (source.length !== dest.length) return { command: null, error: "transliteration sets must have same length" };
-    return { command: { type: "transliterate", address, source, dest } };
-  }
-  parseTextCommand(token, address) {
-    const cmd = token.value; const text = token.text || "";
-    if (cmd === "a") return { command: { type: "append", address, text } };
-    if (cmd === "i") return { command: { type: "insert", address, text } };
-    if (cmd === "c") return { command: { type: "change", address, text } };
-    return { command: null, error: `unknown text command: ${cmd}` };
-  }
   parseGroup(address) {
     this.advance(); const commands =[];
     while (!this.isAtEnd() && !this.check(SedTokenType.RBRACE)) {
@@ -98,7 +80,7 @@ export class SedParser {
     if (this.check(SedTokenType.COMMA)) return { error: "expected context address" };
     const start = this.parseAddress(); if (start === undefined) return undefined;
     let end;
-    if (this.check(SedTokenType.RELATIVE_OFFSET)) { const token = this.advance(); end = { offset: token.offset || 0 }; } 
+    if (this.check(SedTokenType.RELATIVE_OFFSET)) { const token = this.advance(); end = { offset: token.offset || 0 }; }
     else if (this.check(SedTokenType.COMMA)) { this.advance(); end = this.parseAddress(); if (end === undefined) return { error: "expected context address" }; }
     return { address: { start, end } };
   }
