@@ -5,262 +5,520 @@ import path from 'path';
 import os from 'os';
 
 const myVfs = {
-  "notes.txt": "Hello, this is a test file containing the word hello.",
-  "multi.txt": "one\ntwo\nthree\nfour\nfive",
-  "empty.txt": "",
-  "numbers.txt": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10"
+  'notes.txt': 'Hello, this is a test file containing the word hello.',
+  'multi.txt': 'one\ntwo\nthree\nfour\nfive',
+  'empty.txt': '',
+  'numbers.txt': '1\n2\n3\n4\n5\n6\n7\n8\n9\n10',
 };
 
 async function fakeShell(cmd) {
-  if (cmd === "whoami") return "user";
-  return "unknown command";
+  if (cmd === 'whoami') return 'user';
+  return 'unknown command';
 }
 
-/* ----------------------------- */
+async function systemShell(cmd) {
+  const { stdout } = await execa.command(cmd, { shell: true });
+  return stdout;
+}
 
-let tmpDir;
+function normalizeEol(value) {
+  return String(value ?? '').replace(/\r\n/g, '\n');
+}
 
-beforeAll(async () => {
-  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sed-test-'));
-
-  for (const [name, content] of Object.entries(myVfs)) {
-    await fs.writeFile(path.join(tmpDir, name), content);
-  }
-});
-
-afterAll(async () => {
-  await fs.rm(tmpDir, { recursive: true, force: true });
-});
-
-/* ----------------------------- */
-/* YOUR IMPLEMENTATION RUNNER */
-/* ----------------------------- */
-
-async function runSed(command, stdin = null) {
+async function runSed(command, stdin = null, shell = fakeShell) {
   try {
     let result;
 
     if (stdin === null || stdin === undefined) {
-      result = await sed(command, { vfs: myVfs, shell: fakeShell });
+      result = await sed(command, { vfs: myVfs, shell });
     } else {
-      result = await sed(command, { stdin, shell: fakeShell });
+      result = await sed(command, { stdin, shell });
     }
 
-    return { success: true, data: result, error: null };
-  } catch (err) {
-    return { success: false, data: null, error: err.message };
-  }
-}
-
-/* ----------------------------- */
-/* SYSTEM SED RUNNER */
-/* ----------------------------- */
-
-const SED_BIN = process.platform === 'darwin' ? 'gsed' : 'sed';
-
-function mapCommandToSystem(command) {
-  let mapped = command;
-
-  for (const name of Object.keys(myVfs)) {
-    const full = path.join(tmpDir, name);
-    mapped = mapped.replace(new RegExp(`\\b${name}\\b`, 'g'), full);
-  }
-
-  return mapped;
-}
-
-// VERY IMPORTANT: don't rely on shell parsing
-function splitArgs(command) {
-  // naive but works for your test set
-  // preserves quoted segments
-  const re = /'[^']*'|"[^"]*"|\\S+/g;
-  return command.match(re) || [];
-}
-
-async function runSystemSed(command, stdin = null) {
-  try {
-    const mapped = mapCommandToSystem(command);
-    const args = splitArgs(mapped);
-
-    const hasInput = stdin !== null && stdin !== undefined;
-
-    const { stdout } = await execa(SED_BIN, args, {
-      input: hasInput ? stdin : undefined,
-      env: { ...process.env, LC_ALL: 'C' }
-    });
-
-    return { success: true, data: stdout, error: null };
+    return { success: true, data: normalizeEol(result), error: null };
   } catch (err) {
     return {
       success: false,
       data: null,
-      error: err.stderr || err.message
+      error: normalizeEol(err?.message || err?.stderr || String(err)),
     };
   }
 }
 
-/* ----------------------------- */
-/* NORMALIZATION */
-/* ----------------------------- */
+async function runSystemSed(args, stdin = null) {
+  try {
+    const options = stdin === null || stdin === undefined ? {} : { input: stdin };
+    const { stdout } = await execa('sed', args, options);
 
-function normalize(s) {
-  if (typeof s !== 'string') return s;
-
-  // normalize trailing newline differences
-  return s.replace(/\n$/, '');
-}
-
-/* ----------------------------- */
-/* ASSERTION WRAPPER */
-/* ----------------------------- */
-
-async function expectSedMatch(command, stdin = null) {
-  const mine = await runSed(command, stdin);
-  const real = await runSystemSed(command, stdin);
-
-  expect(mine.success).toBe(real.success);
-
-  if (mine.success) {
-    expect(normalize(mine.data)).toBe(normalize(real.data));
-  } else {
-    expect(mine.error).toBe(real.error);
+    return { success: true, data: normalizeEol(stdout), error: null };
+  } catch (err) {
+    return {
+      success: false,
+      data: null,
+      error: normalizeEol(err?.stderr || err?.message || String(err)),
+    };
   }
-
-  return mine;
 }
 
-/* ========================================================= */
+async function expectSameSedOutput({
+  portCommand,
+  systemArgs,
+  stdin = null,
+  shell = fakeShell,
+}) {
+  const [port, system] = await Promise.all([
+    runSed(portCommand, stdin, shell),
+    runSystemSed(systemArgs, stdin),
+  ]);
 
-describe('Sed.js FULL Test Suite (Validated Against System sed)', () => {
+  expect(port.success).toBe(true);
+  expect(system.success).toBe(true);
+  expect(port.data).toBe(system.data);
 
+  return { port, system };
+}
+
+export { runSed };
+
+describe('Sed.js Tests vs System Sed', () => {
+  let tmpDir;
+  let notesPath;
+  let multiPath;
+  let emptyPath;
+  let numbersPath;
+
+  beforeAll(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sed-test-'));
+
+    notesPath = path.join(tmpDir, 'notes.txt');
+    multiPath = path.join(tmpDir, 'multi.txt');
+    emptyPath = path.join(tmpDir, 'empty.txt');
+    numbersPath = path.join(tmpDir, 'numbers.txt');
+
+    await fs.writeFile(notesPath, myVfs['notes.txt']);
+    await fs.writeFile(multiPath, myVfs['multi.txt']);
+    await fs.writeFile(emptyPath, myVfs['empty.txt']);
+    await fs.writeFile(numbersPath, myVfs['numbers.txt']);
+  });
+
+  afterAll(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('should replace "hello" with "hi" and match system sed', async () => {
+    const response = await expectSameSedOutput({
+      portCommand: `s/hello/hi/ notes.txt`,
+      systemArgs: ['s/hello/hi/', notesPath],
+    });
+
+    expect(response.port.data).toContain('hi');
+  });
+
+  it('should handle stdin correctly and match system sed', async () => {
+    await expectSameSedOutput({
+      portCommand: 's/test/TEST/',
+      systemArgs: ['s/test/TEST/'],
+      stdin: 'This is a test string.',
+    });
+  });
+});
+
+describe('Sed.js FULL Test Suite', () => {
   describe('Basic Substitution', () => {
     it('replaces first match only', async () => {
-      const r = await expectSedMatch('s/apple/orange/', 'apple apple apple');
-      expect(r.data).toBe('orange apple apple');
+      await expectSameSedOutput({
+        portCommand: 's/apple/orange/',
+        systemArgs: ['s/apple/orange/'],
+        stdin: 'apple apple apple',
+      });
     });
 
     it('global replacement', async () => {
-      const r = await expectSedMatch('s/apple/orange/g', 'apple apple apple');
-      expect(r.data).toBe('orange orange orange');
+      await expectSameSedOutput({
+        portCommand: 's/apple/orange/g',
+        systemArgs: ['s/apple/orange/g'],
+        stdin: 'apple apple apple',
+      });
     });
 
     it('case insensitive', async () => {
-      const r = await expectSedMatch('s/hello/hi/I', 'Hello hello HELLO');
-      expect(r.data).toBe('hi hi hi');
+      await expectSameSedOutput({
+        portCommand: 's/hello/hi/I',
+        systemArgs: ['s/hello/hi/I'],
+        stdin: 'Hello hello HELLO',
+      });
     });
 
     it('backreferences', async () => {
-      const r = await expectSedMatch('s/\\(\\w\\+\\) \\(\\w\\+\\)/\\2 \\1/', 'hello world');
-      expect(r.data).toBe('world hello');
+      await expectSameSedOutput({
+        portCommand: 's/\\(\\w\\+\\) \\(\\w\\+\\)/\\2 \\1/',
+        systemArgs: ['s/\\(\\w\\+\\) \\(\\w\\+\\)/\\2 \\1/'],
+        stdin: 'hello world',
+      });
     });
 
     it('ampersand replacement', async () => {
-      const r = await expectSedMatch('s/foo/[&]/g', 'foo foo');
-      expect(r.data).toBe('[foo] [foo]');
+      await expectSameSedOutput({
+        portCommand: 's/foo/[&]/g',
+        systemArgs: ['s/foo/[&]/g'],
+        stdin: 'foo foo',
+      });
     });
 
     it('is case-sensitive by default', async () => {
-      const r = await expectSedMatch('s/hello/hi/', 'Hello hello HELLO');
-      expect(r.data).toBe('Hello hi HELLO');
+      await expectSameSedOutput({
+        portCommand: 's/hello/hi/',
+        systemArgs: ['s/hello/hi/'],
+        stdin: 'Hello hello HELLO',
+      });
+    });
+
+    it('only replaces the first occurrence per line by default', async () => {
+      await expectSameSedOutput({
+        portCommand: 's/apple/orange/',
+        systemArgs: ['s/apple/orange/'],
+        stdin: 'apple apple apple',
+      });
     });
 
     it('supports combined flags (gI)', async () => {
-      const r = await expectSedMatch('s/hello/hi/gI', 'Hello hello HELLO');
-      expect(r.data).toBe('hi hi hi');
+      await expectSameSedOutput({
+        portCommand: 's/hello/hi/gI',
+        systemArgs: ['s/hello/hi/gI'],
+        stdin: 'Hello hello HELLO',
+      });
     });
   });
 
   describe('Regex and Special Characters', () => {
     it('regex dot matches any character', async () => {
-      const r = await expectSedMatch('s/c.t/dog/g', 'cat cot cut');
-      expect(r.data).toBe('dog dog dog');
+      await expectSameSedOutput({
+        portCommand: 's/c.t/dog/g',
+        systemArgs: ['s/c.t/dog/g'],
+        stdin: 'cat cot cut',
+      });
     });
 
-    it('handles anchors', async () => {
+    it('handles start (^) and end ($) anchors', async () => {
       const input = 'test results for test';
 
-      const start = await expectSedMatch('s/^test/FINAL/', input);
-      const end = await expectSedMatch('s/test$/FINAL/', input);
+      const start = await expectSameSedOutput({
+        portCommand: 's/^test/FINAL/',
+        systemArgs: ['s/^test/FINAL/'],
+        stdin: input,
+      });
 
-      expect(start.data).toBe('FINAL results for test');
-      expect(end.data).toBe('test results for FINAL');
+      const end = await expectSameSedOutput({
+        portCommand: 's/test$/FINAL/',
+        systemArgs: ['s/test$/FINAL/'],
+        stdin: input,
+      });
+
+      expect(start.port.data).toBe('FINAL results for test');
+      expect(end.port.data).toBe('test results for FINAL');
     });
   });
 
   describe('Addressing', () => {
     it('single line number', async () => {
-      const r = await expectSedMatch('2s/two/TWO/', myVfs['multi.txt']);
-      expect(r.data).toBe("one\nTWO\nthree\nfour\nfive");
+      await expectSameSedOutput({
+        portCommand: '2s/two/TWO/',
+        systemArgs: ['2s/two/TWO/', multiPath],
+      });
     });
 
     it('range addressing', async () => {
-      const r = await expectSedMatch('2,4s/.*/X/', myVfs['multi.txt']);
-      expect(r.data).toBe("one\nX\nX\nX\nfive");
+      await expectSameSedOutput({
+        portCommand: '2,4s/.*/X/',
+        systemArgs: ['2,4s/.*/X/', multiPath],
+      });
     });
 
     it('regex address', async () => {
-      const r = await expectSedMatch('/three/s/.*/MATCH/', myVfs['multi.txt']);
-      expect(r.data).toContain('MATCH');
+      const { port, system } = await expectSameSedOutput({
+        portCommand: '/three/s/.*/MATCH/',
+        systemArgs: ['/three/s/.*/MATCH/', multiPath],
+      });
+
+      expect(port.data).toContain('MATCH');
+      expect(system.data).toContain('MATCH');
     });
 
     it('negated address', async () => {
-      const r = await expectSedMatch('/three/!s/.*/NO/', myVfs['multi.txt']);
-      expect(r.data).toBe("NO\nNO\nthree\nNO\nNO");
+      await expectSameSedOutput({
+        portCommand: '/three/!s/.*/NO/',
+        systemArgs: ['/three/!s/.*/NO/', multiPath],
+      });
     });
   });
 
   describe('Multiple Commands', () => {
     it('-e chaining', async () => {
-      const r = await expectSedMatch("-e 's/a/A/g' -e 's/b/B/g'", 'abc');
-      expect(r.data).toBe('ABc');
+      await expectSameSedOutput({
+        portCommand: `-e 's/a/A/g' -e 's/b/B/g'`,
+        systemArgs: ['-e', 's/a/A/g', '-e', 's/b/B/g'],
+        stdin: 'abc',
+      });
     });
 
     it('semicolon chaining', async () => {
-      const r = await expectSedMatch('s/a/A/; s/b/B/', 'abc');
-      expect(r.data).toBe('ABc');
+      await expectSameSedOutput({
+        portCommand: 's/a/A/; s/b/B/',
+        systemArgs: ['s/a/A/; s/b/B/'],
+        stdin: 'abc',
+      });
+    });
+
+    it('complex multi-stage transformation (case + hold + conditional)', async () => {
+      const stdin = `sed is powerful\nxyz`;
+
+      await expectSameSedOutput({
+        portCommand: `-e 's/[a-z]/\\U&/g' -e '/[AEIOU]/ { h; s/./*/g; G; s/\\n/ /; }'`,
+        systemArgs: ['-e', 's/[a-z]/\\U&/g', '-e', '/[AEIOU]/ { h; s/./*/g; G; s/\\n/ /; }'],
+        stdin,
+      });
     });
   });
 
   describe('Hold Space', () => {
     it('h and g', async () => {
-      const r = await expectSedMatch('h; s/.*/X/; g', 'hello');
-      expect(r.data).toBe('hello');
+      await expectSameSedOutput({
+        portCommand: 'h; s/.*/X/; g',
+        systemArgs: ['h; s/.*/X/; g'],
+        stdin: 'hello',
+      });
+    });
+
+    it('H and G append', async () => {
+      await expectSameSedOutput({
+        portCommand: 'H; $!d; x',
+        systemArgs: ['H; $!d; x'],
+        stdin: 'a\nb\nc',
+      });
+    });
+
+    it('x swap', async () => {
+      await expectSameSedOutput({
+        portCommand: 'h; s/a/b/; x',
+        systemArgs: ['h; s/a/b/; x'],
+        stdin: 'a',
+      });
     });
   });
 
   describe('Delete & Print', () => {
     it('delete matching lines', async () => {
-      const r = await expectSedMatch('/two/d', myVfs['multi.txt']);
-      expect(r.data).not.toContain('two');
+      const { port, system } = await expectSameSedOutput({
+        portCommand: '/two/d',
+        systemArgs: ['/two/d', multiPath],
+      });
+
+      expect(port.data).not.toContain('two');
+      expect(system.data).not.toContain('two');
     });
 
-    it('print only matching', async () => {
-      const r = await expectSedMatch('-n /two/p', myVfs['multi.txt']);
-      expect(r.data.trim()).toBe('two');
+    it('print only matching (-n + p)', async () => {
+      await expectSameSedOutput({
+        portCommand: '-n /two/p',
+        systemArgs: ['-n', '/two/p', multiPath],
+      });
+    });
+
+    it('default print suppressed with -n', async () => {
+      await expectSameSedOutput({
+        portCommand: '-n',
+        systemArgs: ['-n'],
+        stdin: 'hello',
+      });
     });
   });
 
   describe('Text Commands', () => {
     it('append (a)', async () => {
-      const r = await expectSedMatch('/two/a AFTER', myVfs['multi.txt']);
-      expect(r.data).toContain('two\nAFTER');
+      await expectSameSedOutput({
+        portCommand: '/two/a AFTER',
+        systemArgs: ['/two/a AFTER', multiPath],
+      });
+    });
+
+    it('insert (i)', async () => {
+      await expectSameSedOutput({
+        portCommand: '/two/i BEFORE',
+        systemArgs: ['/two/i BEFORE', multiPath],
+      });
+    });
+
+    it('change (c)', async () => {
+      await expectSameSedOutput({
+        portCommand: '/two/c REPLACED',
+        systemArgs: ['/two/c REPLACED', multiPath],
+      });
+    });
+  });
+
+  describe('Branching', () => {
+    it('simple label + branch', async () => {
+      const cmd = `
+:a
+s/a/A/
+ta
+`;
+
+      await expectSameSedOutput({
+        portCommand: cmd,
+        systemArgs: ['-e', ':a\ns/a/A/\nta'],
+        stdin: 'aaa',
+      });
+    });
+
+    it('conditional branch (t)', async () => {
+      await expectSameSedOutput({
+        portCommand: 's/a/A/; t done; s/b/B/; :done',
+        systemArgs: ['s/a/A/; t done; s/b/B/; :done'],
+        stdin: 'a',
+      });
+    });
+  });
+
+  describe('Multiline Pattern Space', () => {
+    it('N command joins lines', async () => {
+      await expectSameSedOutput({
+        portCommand: 'N; s/\\n/ /',
+        systemArgs: ['N; s/\\n/ /'],
+        stdin: 'hello\nworld',
+      });
+    });
+
+    it('D command partial delete', async () => {
+      await expectSameSedOutput({
+        portCommand: 'N; D',
+        systemArgs: ['N; D'],
+        stdin: 'a\nb\nc',
+      });
+    });
+
+    it('P prints partial', async () => {
+      await expectSameSedOutput({
+        portCommand: '-n N; P',
+        systemArgs: ['-n', 'N; P'],
+        stdin: 'a\nb',
+      });
+    });
+
+    it('processes substitution on every line of a multi-line string', async () => {
+      await expectSameSedOutput({
+        portCommand: 's/line/row/g',
+        systemArgs: ['s/line/row/g'],
+        stdin: 'line one\nline two\nline three',
+      });
+    });
+  });
+
+  describe('VFS', () => {
+    it('reads file', async () => {
+      await expectSameSedOutput({
+        portCommand: 's/hello/hi/g notes.txt',
+        systemArgs: ['s/hello/hi/g', notesPath],
+      });
+    });
+
+    it('missing file error', async () => {
+      const port = await runSed('s/x/y/ nope.txt');
+      const system = await runSystemSed(['s/x/y/', path.join(tmpDir, 'nope.txt')]);
+
+      expect(port.success).toBe(false);
+      expect(system.success).toBe(false);
+      expect(port.error).toMatch(/nope\.txt/i);
+      expect(system.error).toMatch(/nope\.txt/i);
+    });
+
+    it('reads from the virtual file system', async () => {
+      await expectSameSedOutput({
+        portCommand: 's/test/demo/ notes.txt',
+        systemArgs: ['s/test/demo/', notesPath],
+      });
+    });
+
+    it('throws or returns error for non-existent files', async () => {
+      const port = await runSed('s/foo/bar/ ghost.txt');
+      const system = await runSystemSed(['s/foo/bar/', path.join(tmpDir, 'ghost.txt')]);
+
+      expect(port.success).toBe(false);
+      expect(system.success).toBe(false);
+      expect(port.error).toMatch(/ghost\.txt/i);
+      expect(system.error).toMatch(/ghost\.txt/i);
     });
   });
 
   describe('Edge Cases', () => {
     it('empty input', async () => {
-      const r = await expectSedMatch('s/a/b/', '');
-      expect(r.data).toBe('');
+      await expectSameSedOutput({
+        portCommand: 's/a/b/',
+        systemArgs: ['s/a/b/'],
+        stdin: '',
+      });
+    });
+
+    it('empty file', async () => {
+      await expectSameSedOutput({
+        portCommand: 's/a/b/ empty.txt',
+        systemArgs: ['s/a/b/', emptyPath],
+      });
     });
 
     it('no match substitution', async () => {
-      const r = await expectSedMatch('s/x/y/', 'abc');
-      expect(r.data).toBe('abc');
+      await expectSameSedOutput({
+        portCommand: 's/x/y/',
+        systemArgs: ['s/x/y/'],
+        stdin: 'abc',
+      });
+    });
+
+    it('large input stress', async () => {
+      const big = 'a\n'.repeat(10000);
+
+      await expectSameSedOutput({
+        portCommand: 's/a/b/g',
+        systemArgs: ['s/a/b/g'],
+        stdin: big,
+      });
     });
   });
 
-  it("executes shell with 'e' flag", async () => {
-    const r = await expectSedMatch("s/.*/&/e", "whoami");
-    expect(r.data.trim()).toBe("user");
+  it("executes shell with 'e' flag (s///e)", async () => {
+    const response = await runSed('s/.*/&/e', 'whoami', systemShell);
+    const expected = await runSystemSed(['s/.*/&/e'], 'whoami');
+
+    expect(response.success).toBe(true);
+    expect(expected.success).toBe(true);
+    expect(response.data.trim()).toBe(expected.data.trim());
+  });
+
+  describe('Real-world pipelines', () => {
+    it('number lines', async () => {
+      await expectSameSedOutput({
+        portCommand: '=; N; s/\\n/: /',
+        systemArgs: ['=; N; s/\\n/: /'],
+        stdin: 'a\nb',
+      });
+    });
+
+    it('duplicate lines', async () => {
+      await expectSameSedOutput({
+        portCommand: 'p',
+        systemArgs: ['p'],
+        stdin: 'x',
+      });
+    });
+
+    it('reverse file using hold space', async () => {
+      const cmd = '1!G; h; $!d';
+
+      await expectSameSedOutput({
+        portCommand: cmd,
+        systemArgs: [cmd],
+        stdin: 'a\nb\nc',
+      });
+    });
   });
 });
