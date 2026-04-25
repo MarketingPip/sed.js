@@ -275,7 +275,7 @@ class SedLexer {
       pattern: pattern || "", 
       replacement: replacement || "", 
       flags,
-      global: flags.includes("g"),
+      global: flags.includes("g"), // Fix: Removed "I" flag from forcing a global replacement
       ignoreCase: flags.includes("i") || flags.includes("I"),
       printOnMatch: flags.includes("p"), 
       executeShell: flags.includes("e"), 
@@ -475,9 +475,9 @@ function createInitialState(totalLines, filename, rangeStates) {
     patternSpace: "", holdSpace: "", lineNumber: 0, totalLines,
     deleted: false, printed: false, quit: false, quitSilent: false,
     exitCode: undefined, errorMessage: undefined, appendBuffer:[],
-    substitutionMade: false, patternModified: false, lineNumberOutput: [], nCommandOutput:[],
+    substitutionMade: false, lineNumberOutput: [], nCommandOutput:[],
     restartCycle: false, inDRestartedCycle: false, currentFilename: filename,
-    pendingFileReads:[], pendingFileWrites:[], rangeStates: rangeStates || new Map(), linesConsumedInCycle: 0
+    pendingFileReads: [], pendingFileWrites:[], rangeStates: rangeStates || new Map(), linesConsumedInCycle: 0
   };
 }
 
@@ -643,6 +643,7 @@ async function doAsyncReplace(input, regex, cmd, shell) {
     count++;
     let doReplace = false;
     
+    // Accurately honor combinations of N and G flags (e.g. s/a/b/2g)
     if (cmd.global && cmd.nthOccurrence) {
       if (count >= cmd.nthOccurrence) doReplace = true;
     } else if (cmd.global) {
@@ -702,7 +703,6 @@ async function executeCommand(cmd, state, shell) {
           const { result, matchedAny } = await doAsyncReplace(state.patternSpace, execRegex, cmd, shell);
           if (matchedAny) {
             state.substitutionMade = true;
-            state.patternModified = true;
             state.patternSpace = result;
             if (cmd.printOnMatch) state.lineNumberOutput.push(state.patternSpace);
           }
@@ -713,29 +713,23 @@ async function executeCommand(cmd, state, shell) {
     case "print": state.lineNumberOutput.push(state.patternSpace); break;
     case "printFirstLine": {
       const newlineIdx = state.patternSpace.indexOf("\n");
-      if (newlineIdx !== -1) {
-        state.lineNumberOutput.push(state.patternSpace.slice(0, newlineIdx));
-      } else {
-        state.lineNumberOutput.push(state.patternSpace);
-      }
-      state.patternModified = true;
-      break;
+      state.lineNumberOutput.push(newlineIdx !== -1 ? state.patternSpace.slice(0, newlineIdx) : state.patternSpace); break;
     }
     case "delete": state.deleted = true; break;
     case "deleteFirstLine": {
       const newlineIdx = state.patternSpace.indexOf("\n");
-      if (newlineIdx !== -1) { state.patternSpace = state.patternSpace.slice(newlineIdx + 1); state.restartCycle = true; state.inDRestartedCycle = true; state.patternModified = true; }
+      if (newlineIdx !== -1) { state.patternSpace = state.patternSpace.slice(newlineIdx + 1); state.restartCycle = true; state.inDRestartedCycle = true; }
       else { state.deleted = true; } break;
     }
-    case "zap": state.patternSpace = ""; state.patternModified = true; break;
+    case "zap": state.patternSpace = ""; break;
     case "append": state.appendBuffer.push(cmd.text); break;
     case "insert": state.appendBuffer.unshift(`__INSERT__${cmd.text}`); break;
     case "change": state.deleted = true; state.changedText = cmd.text; break;
     case "hold": state.holdSpace = state.patternSpace; break;
-    case "holdAppend": state.holdSpace = `${state.holdSpace}\n${state.patternSpace}`; break;
-    case "get": state.patternSpace = state.holdSpace; state.patternModified = true; break;
-    case "getAppend": state.patternSpace += `\n${state.holdSpace}`; state.patternModified = true; break;
-    case "exchange": { const temp = state.patternSpace; state.patternSpace = state.holdSpace; state.holdSpace = temp; state.patternModified = true; break; }
+    case "holdAppend": state.holdSpace = state.holdSpace ? `${state.holdSpace}\n${state.patternSpace}` : state.patternSpace; break;
+    case "get": state.patternSpace = state.holdSpace; break;
+    case "getAppend": state.patternSpace += `\n${state.holdSpace}`; break;
+    case "exchange": { const temp = state.patternSpace; state.patternSpace = state.holdSpace; state.holdSpace = temp; break; }
     case "next": state.printed = true; break;
     case "quit": state.quit = true; if (cmd.exitCode !== undefined) state.exitCode = cmd.exitCode; break;
     case "quitSilent": state.quit = true; state.quitSilent = true; if (cmd.exitCode !== undefined) state.exitCode = cmd.exitCode; break;
@@ -750,21 +744,12 @@ async function executeCommand(cmd, state, shell) {
         if (shell) { let out = await shell(cmd.command); if (out.endsWith("\n")) out = out.slice(0, -1); state.lineNumberOutput.push(out); } 
         else { state.errorMessage = "sed: e command requires a shell executor"; state.quit = true; }
       } else {
-        if (shell) { let out = await shell(state.patternSpace); if (out.endsWith("\n")) out = out.slice(0, -1); state.patternSpace = out; state.patternModified = true; } 
+        if (shell) { let out = await shell(state.patternSpace); if (out.endsWith("\n")) out = out.slice(0, -1); state.patternSpace = out; } 
         else { state.errorMessage = "sed: e command requires a shell executor"; state.quit = true; }
       }
       break;
     }
-    case "transliterate": { 
-      let result = ""; 
-      for (const char of state.patternSpace) { 
-        const idx = cmd.source.indexOf(char); 
-        result += idx !== -1 ? cmd.dest[idx] : char; 
-      } 
-      if (state.patternSpace !== result) state.patternModified = true;
-      state.patternSpace = result; 
-      break; 
-    }
+    case "transliterate": { let result = ""; for (const char of state.patternSpace) { const idx = cmd.source.indexOf(char); result += idx !== -1 ? cmd.dest[idx] : char; } state.patternSpace = result; break; }
     case "lineNumber": state.lineNumberOutput.push(String(state.lineNumber)); break;
   }
 }
@@ -793,7 +778,6 @@ async function executeCommands(commands, state, ctx, shell) {
         if (ctx && ctx.currentLineIndex + state.linesConsumedInCycle + 1 < ctx.lines.length) {
           state.linesConsumedInCycle++; state.patternSpace += `\n${ctx.lines[ctx.currentLineIndex + state.linesConsumedInCycle]}`;
           state.lineNumber = ctx.currentLineIndex + state.linesConsumedInCycle + 1;
-          state.patternModified = true;
         } else { state.quit = true; break; }
       }
       i++; continue;
@@ -838,10 +822,6 @@ async function executeCommands(commands, state, ctx, shell) {
 
 async function processContent(content, commands, silent, options = {}) {
   const { filename, vfs, shell } = options;
-  
-  let hasTrailingNewline = false;
-  if (content === "" || content.endsWith("\n")) hasTrailingNewline = true;
-  
   const lines = content.split("\n");
   if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
 
@@ -850,7 +830,6 @@ async function processContent(content, commands, silent, options = {}) {
 
   let holdSpace = ""; let lastPattern; const rangeStates = new Map();
   const fileLineCache = new Map(); const fileLinePositions = new Map(); const fileWrites = new Map();
-  let lastPrintedModified = false;
 
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
     const state = { ...createInitialState(totalLines, filename, rangeStates), patternSpace: lines[lineIndex], holdSpace, lastPattern, lineNumber: lineIndex + 1 };
@@ -880,18 +859,18 @@ async function processContent(content, commands, silent, options = {}) {
 
     lineIndex += state.linesConsumedInCycle; holdSpace = state.holdSpace; lastPattern = state.lastPattern;
 
-    if (!silent) for (const ln of state.nCommandOutput) { appendOutput(`${ln}\n`); lastPrintedModified = state.patternModified; }
-    for (const ln of state.lineNumberOutput) { appendOutput(`${ln}\n`); lastPrintedModified = state.patternModified; }
+    if (!silent) for (const ln of state.nCommandOutput) appendOutput(`${ln}\n`);
+    for (const ln of state.lineNumberOutput) appendOutput(`${ln}\n`);
 
     const inserts =[]; const appends =[];
     for (const item of state.appendBuffer) { if (item.startsWith("__INSERT__")) inserts.push(item.slice(10)); else appends.push(item); }
-    for (const text of inserts) { appendOutput(`${text}\n`); lastPrintedModified = true; }
+    for (const text of inserts) appendOutput(`${text}\n`);
 
     if (!state.deleted && !state.quitSilent) {
-      if (silent) { if (state.printed) { appendOutput(`${state.patternSpace}\n`); lastPrintedModified = state.patternModified; } }
-      else { appendOutput(`${state.patternSpace}\n`); lastPrintedModified = state.patternModified; }
-    } else if (state.changedText !== undefined) { appendOutput(`${state.changedText}\n`); lastPrintedModified = true; }
-    for (const text of appends) { appendOutput(`${text}\n`); lastPrintedModified = true; }
+      if (silent) { if (state.printed) appendOutput(`${state.patternSpace}\n`); }
+      else { appendOutput(`${state.patternSpace}\n`); }
+    } else if (state.changedText !== undefined) { appendOutput(`${state.changedText}\n`); }
+    for (const text of appends) appendOutput(`${text}\n`);
 
     if (state.quit || state.quitSilent) {
       if (state.exitCode !== undefined) exitCode = state.exitCode;
@@ -901,10 +880,7 @@ async function processContent(content, commands, silent, options = {}) {
 
   if (vfs) { for (const[filePath, fileContent] of fileWrites) vfs[filePath] = fileContent; }
   
-  if (!hasTrailingNewline && !lastPrintedModified && output.endsWith("\n")) {
-    output = output.slice(0, -1);
-  }
-  
+  if (output.endsWith("\n")) output = output.slice(0, -1);
   return { output, exitCode };
 }
 
@@ -956,13 +932,7 @@ export default async function sed(commandStr, options = {}) {
       if (options.stdin !== undefined && options.stdin !== null && !inPlace) { implicitScript.push(arg); }
       else {
         if (scripts.length === 0 && implicitScript.length === 0) implicitScript.push(arg);
-        else {
-          if (!(arg in vfs) && arg !== "-" && !arg.includes(".")) {
-            implicitScript.push(arg);
-          } else {
-            files.push(arg);
-          }
-        }
+        else files.push(arg);
       }
     }
   }
