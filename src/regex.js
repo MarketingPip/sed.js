@@ -1,11 +1,5 @@
-// ==========================================
-// 1. Regex Utilities
-// ==========================================
-
 const POSIX_CLASSES = new Map([
-  ["alnum", "a-zA-Z0-9"],["alpha", "a-zA-Z"], ["ascii", "\\x00-\\x7F"],["blank", " \\t"], ["cntrl", "\\x00-\\x1F\\x7F"],["digit", "0-9"],
-  ["graph", "!-~"], ["lower", "a-z"],["print", " -~"],
-  ["punct", "!-/:-@\\[-`{-~"],["space", " \\t\\n\\r\\f\\v"], ["upper", "A-Z"],["word", "a-zA-Z0-9_"], ["xdigit", "0-9A-Fa-f"]
+  ["alnum", "a-zA-Z0-9"],["alpha", "a-zA-Z"], ["ascii", "\\x00-\\x7F"], ["blank", " \\t"],["cntrl", "\\x00-\\x1F\\x7F"], ["digit", "0-9"],["graph", "!-~"], ["lower", "a-z"], ["print", " -~"],["punct", "!-/:-@\\[-`{-~"],["space", " \\t\\n\\r\\f\\v"], ["upper", "A-Z"], ["word", "a-zA-Z0-9_"],["xdigit", "0-9A-Fa-f"]
 ]);
 
 export function breToEre(pattern) {
@@ -76,8 +70,8 @@ export function normalizeForJs(pattern) {
       if (i < pattern.length && pattern[i] === "^") { result += "^"; i++; }
       if (i < pattern.length && pattern[i] === "]") { result += "]"; i++; }
       i--;
-    } else if (pattern[i] === "]" && inBracket) { inBracket = false; result += "]"; } 
-    else if (!inBracket && pattern[i] === "{" && pattern[i + 1] === ",") { result += "{0,"; i++; } 
+    } else if (pattern[i] === "]" && inBracket) { inBracket = false; result += "]"; }
+    else if (!inBracket && pattern[i] === "{" && pattern[i + 1] === ",") { result += "{0,"; i++; }
     else { result += pattern[i]; }
   }
   return result;
