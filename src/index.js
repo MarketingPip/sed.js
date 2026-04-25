@@ -960,59 +960,118 @@ async function doAsyncReplace(input, regex, cmd, shell) {
 async function executeCommand(cmd, state, shell) {
   const { lineNumber, totalLines, patternSpace } = state;
   if (cmd.type === "label") return;
+  
   if (!isInRange(cmd.address, lineNumber, totalLines, patternSpace, state.rangeStates, state)) return;
 
   switch (cmd.type) {
- 
-
- 
- 
-      
     case "substitute": {
-      let flags = "";
-      if (cmd.global) flags += "g";
-      if (cmd.ignoreCase) flags += "i";
       let rawPattern = cmd.pattern;
       if (rawPattern === "" && state.lastPattern) rawPattern = state.lastPattern;
       else if (rawPattern !== "") state.lastPattern = rawPattern;
+      
       const pattern = normalizeForJs(cmd.extendedRegex ? rawPattern : breToEre(rawPattern));
 
       try {
         const execRegex = new RegExp(pattern, "g" + (cmd.ignoreCase ? "i" : ""));
         const testRegex = new RegExp(pattern, cmd.ignoreCase ? "i" : "");
+        
         if (testRegex.test(state.patternSpace)) {
           const { result, matchedAny } = await doAsyncReplace(state.patternSpace, execRegex, cmd, shell);
           if (matchedAny) {
             state.substitutionMade = true;
             state.patternSpace = result;
+            // Standard 'p' flag logic
             if (cmd.printOnMatch) state.lineNumberOutput.push(state.patternSpace);
           }
         }
-      } catch (e) { /* ignore */ }
+      } catch (e) { /* ignore invalid regex */ }
       break;
     }
-    case "print": state.lineNumberOutput.push(state.patternSpace); break;
-    case "printFirstLine": {
-      const newlineIdx = state.patternSpace.indexOf("\n");
-      state.lineNumberOutput.push(newlineIdx !== -1 ? state.patternSpace.slice(0, newlineIdx) : state.patternSpace); break;
-    }
-    case "delete": state.deleted = true; break;
+
+    case "print": 
+      state.lineNumberOutput.push(state.patternSpace); 
+      break;
+
+    case "delete": 
+      state.deleted = true; 
+      break;
+
     case "deleteFirstLine": {
       const newlineIdx = state.patternSpace.indexOf("\n");
-      if (newlineIdx !== -1) { state.patternSpace = state.patternSpace.slice(newlineIdx + 1); state.restartCycle = true; state.inDRestartedCycle = true; }
-      else { state.deleted = true; } break;
+      if (newlineIdx !== -1) {
+        state.patternSpace = state.patternSpace.slice(newlineIdx + 1);
+        state.restartCycle = true; // Restart script without reading new input
+      } else {
+        state.deleted = true; // No newline? Act like 'd'
+      }
+      break;
     }
-    case "zap": state.patternSpace = ""; break;
-    case "append": state.appendBuffer.push(cmd.text); break;
-    case "insert": state.appendBuffer.unshift(`__INSERT__${cmd.text}`); break;
-    case "change": state.deleted = true; state.changedText = cmd.text; break;
-    case "hold": state.holdSpace = state.patternSpace; break;
-    case "holdAppend": state.holdSpace = state.holdSpace ? `${state.holdSpace}\n${state.patternSpace}` : state.patternSpace; break;
-    case "get": state.patternSpace = state.holdSpace; break;
-    case "getAppend": state.patternSpace += `\n${state.holdSpace}`; break;
-    case "exchange": { const temp = state.patternSpace; state.patternSpace = state.holdSpace; state.holdSpace = temp; break; }
-    case "next": state.printed = true; break;
-    case "quit": state.quit = true; if (cmd.exitCode !== undefined) state.exitCode = cmd.exitCode; break;
+
+    case "append": 
+      state.appendBuffer.push(cmd.text); 
+      break;
+
+    case "insert": 
+      // Inserted text is printed immediately before the pattern space is printed
+      state.lineNumberOutput.push(cmd.text); 
+      break;
+
+    case "change": {
+      state.deleted = true;
+      // 'c' command logic: if part of a range, only print on the last line
+      const rangeKey = serializeRange(cmd.address);
+      const rState = state.rangeStates.get(rangeKey);
+      if (!rState || !rState.active) {
+        state.lineNumberOutput.push(cmd.text);
+      }
+      break;
+    }
+
+    case "hold": 
+      state.holdSpace = state.patternSpace; 
+      break;
+
+    case "holdAppend": 
+      // H: Appends a newline then the pattern space
+      state.holdSpace = (state.holdSpace === undefined ? "" : state.holdSpace) + "\n" + state.patternSpace; 
+      break;
+
+    case "get": 
+      state.patternSpace = state.holdSpace || ""; 
+      break;
+
+    case "getAppend": 
+      // G: Appends a newline then the hold space
+      state.patternSpace += "\n" + (state.holdSpace || ""); 
+      break;
+
+    case "exchange": {
+      const temp = state.patternSpace;
+      state.patternSpace = state.holdSpace || "";
+      state.holdSpace = temp;
+      break;
+    }
+
+    case "next": 
+      // n: Print pattern space, then read next line
+      if (!state.silentMode) state.lineNumberOutput.push(state.patternSpace);
+      state.printed = true; // Signals the engine to consume a new line now
+      break;
+
+    case "transliterate": {
+      let result = "";
+      for (const char of state.patternSpace) {
+        const idx = cmd.source.indexOf(char);
+        result += idx !== -1 ? cmd.dest[idx] : char;
+      }
+      state.patternSpace = result;
+      break;
+    }
+
+    case "quit": 
+      state.quit = true;
+      if (!state.silentMode && !state.deleted) state.lineNumberOutput.push(state.patternSpace);
+      break;
     case "quitSilent": state.quit = true; state.quitSilent = true; if (cmd.exitCode !== undefined) state.exitCode = cmd.exitCode; break;
     case "list": state.lineNumberOutput.push(escapeForList(state.patternSpace)); break;
     case "printFilename": if (state.currentFilename) state.lineNumberOutput.push(state.currentFilename); break;
