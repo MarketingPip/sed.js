@@ -880,7 +880,6 @@ async function processContent(content, commands, silent, options = {}) {
 
   if (vfs) { for (const[filePath, fileContent] of fileWrites) vfs[filePath] = fileContent; }
   
-  if (output.endsWith("\n")) output = output.slice(0, -1);
   return { output, exitCode };
 }
 
@@ -912,8 +911,8 @@ export default async function sed(commandStr, options = {}) {
   let stdin = options.stdin !== undefined ? options.stdin : "";
   if (stdin === null) stdin = "";
 
-  const scripts =[]; let silent = false; let inPlace = false; let extendedRegex = false; const files =[];
-  let implicitScript =[];
+  const scripts = []; let silent = false; let inPlace = false; let extendedRegex = false; const files = [];
+  let implicitScript = [];
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -929,10 +928,24 @@ export default async function sed(commandStr, options = {}) {
       if (arg.includes("E") || arg.includes("r")) extendedRegex = true;
       if (arg.includes("e") && !arg.includes("n") && !arg.includes("i") && i + 1 < args.length) scripts.push(args[++i]);
     } else {
-      if (options.stdin !== undefined && options.stdin !== null && !inPlace) { implicitScript.push(arg); }
-      else {
-        if (scripts.length === 0 && implicitScript.length === 0) implicitScript.push(arg);
-        else files.push(arg);
+      if (options.stdin !== undefined && options.stdin !== null && !inPlace) {
+        // stdin mode: all non-flag args are the script
+        implicitScript.push(arg);
+      } else {
+        // VFS / file mode
+        if (scripts.length > 0) {
+          // explicit -e scripts already collected — everything else is a file
+          files.push(arg);
+        } else {
+          // still building the implicit script; only treat arg as a filename
+          // once the script token is in hand AND the arg looks like a real file
+          const looksLikeFile =
+            implicitScript.length > 0 &&
+            (arg === "-" || arg.includes("/") || arg.includes("\\") || arg in vfs);
+
+          if (looksLikeFile) files.push(arg);
+          else implicitScript.push(arg);
+        }
       }
     }
   }
