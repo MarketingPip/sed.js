@@ -9,6 +9,7 @@ import {breToEre, normalizeForJs, escapeForList} from "./regex.js";
 import {parseMultipleScripts} from "./parser.js";
 
 
+
 // ==========================================
 // 4. Executor
 // ==========================================
@@ -18,7 +19,7 @@ function createInitialState(totalLines, filename, rangeStates) {
     patternSpace: "", holdSpace: "", lineNumber: 0, totalLines,
     deleted: false, printed: false, quit: false, quitSilent: false,
     exitCode: undefined, errorMessage: undefined, appendBuffer: [],
-    substitutionMade: false, lineNumberOutput:[], nCommandOutput:[],
+    substitutionMade: false, lineNumberOutput: [], nCommandOutput:[],
     restartCycle: false, inDRestartedCycle: false, currentFilename: filename,
     pendingFileReads: [], pendingFileWrites:[], rangeStates: rangeStates || new Map(), linesConsumedInCycle: 0
   };
@@ -125,20 +126,6 @@ function isInRange(range, lineNum, totalLines, line, rangeStates, state) {
   return range?.negated ? !result : result;
 }
 
-function globalReplace(input, regex, _replacement, replaceFn) {
-  let result = ""; let pos = 0; let skipZeroLengthAtNextPos = false;
-  while (pos <= input.length) {
-    regex.lastIndex = pos; const match = regex.exec(input);
-    if (!match) { result += input.slice(pos); break; }
-    if (match.index !== pos) { result += input.slice(pos, match.index); pos = match.index; skipZeroLengthAtNextPos = false; continue; }
-    const matchedText = match[0]; const groups = match.slice(1);
-    if (skipZeroLengthAtNextPos && matchedText.length === 0) { if (pos < input.length) { result += input[pos]; pos++; } else { break; } skipZeroLengthAtNextPos = false; continue; }
-    result += replaceFn(matchedText, groups); skipZeroLengthAtNextPos = false;
-    if (matchedText.length === 0) { if (pos < input.length) { result += input[pos]; pos++; } else { break; } } else { pos += matchedText.length; skipZeroLengthAtNextPos = true; }
-  }
-  return result;
-}
-
 function processReplacement(replacement, match, groups) {
   let result = ""; let i = 0;
   let caseMode = "none"; let nextCase = "none";
@@ -161,15 +148,15 @@ function processReplacement(replacement, match, groups) {
         const next = replacement[i + 1];
         if (next === "U") { caseMode = "upper"; i += 2; continue; }
         if (next === "L") { caseMode = "lower"; i += 2; continue; }
-        if (next === "E") { caseMode = "none";  i += 2; continue; }
+        if (next === "E") { caseMode = "none"; i += 2; continue; }
         if (next === "u") { nextCase = "upper"; i += 2; continue; }
         if (next === "l") { nextCase = "lower"; i += 2; continue; }
-        
+
         if (next === "&") { append("&"); i += 2; continue; }
         if (next === "n") { append("\n"); i += 2; continue; }
         if (next === "t") { append("\t"); i += 2; continue; }
         if (next === "r") { append("\r"); i += 2; continue; }
-        
+
         const digit = parseInt(next, 10);
         if (digit === 0) { append(match); i += 2; continue; }
         if (digit >= 1 && digit <= 9) { append(groups[digit - 1] || ""); i += 2; continue; }
@@ -182,7 +169,55 @@ function processReplacement(replacement, match, groups) {
   return result;
 }
 
-async function executeCommand(cmd, state, shell=null) {
+async function doAsyncReplace(input, regex, cmd, shell) {
+  let result = ""; let pos = 0; let skipZeroLengthAtNextPos = false;
+  let count = 0; let matchedAny = false;
+
+  while (pos <= input.length) {
+    regex.lastIndex = pos; const match = regex.exec(input);
+    if (!match) { result += input.slice(pos); break; }
+    if (match.index !== pos) { result += input.slice(pos, match.index); pos = match.index; skipZeroLengthAtNextPos = false; continue; }
+
+    const matchedText = match[0]; const groups = match.slice(1);
+    if (skipZeroLengthAtNextPos && matchedText.length === 0) {
+      if (pos < input.length) { result += input[pos]; pos++; } else { break; }
+      skipZeroLengthAtNextPos = false; continue;
+    }
+
+    count++;
+    let doReplace = false;
+    if (cmd.global) doReplace = true;
+    else if (cmd.nthOccurrence && count === cmd.nthOccurrence) doReplace = true;
+    else if (!cmd.global && !cmd.nthOccurrence && count === 1) doReplace = true;
+
+    if (doReplace) {
+      matchedAny = true;
+      let replaced = processReplacement(cmd.replacement, matchedText, groups);
+      if (cmd.executeShell && shell) {
+        replaced = await shell(replaced);
+        if (replaced.endsWith("\n")) replaced = replaced.slice(0, -1);
+      }
+      result += replaced;
+    } else {
+      result += matchedText;
+    }
+
+    skipZeroLengthAtNextPos = false;
+    if (matchedText.length === 0) {
+      if (pos < input.length) { result += input[pos]; pos++; } else { break; }
+    } else {
+      pos += matchedText.length; skipZeroLengthAtNextPos = true;
+    }
+
+    if (!cmd.global && count >= (cmd.nthOccurrence || 1)) {
+      result += input.slice(pos);
+      break;
+    }
+  }
+  return { result, matchedAny };
+}
+
+async function executeCommand(cmd, state, shell) {
   const { lineNumber, totalLines, patternSpace } = state;
   if (cmd.type === "label") return;
   if (!isInRange(cmd.address, lineNumber, totalLines, patternSpace, state.rangeStates, state)) return;
@@ -198,32 +233,15 @@ async function executeCommand(cmd, state, shell=null) {
       const pattern = normalizeForJs(cmd.extendedRegex ? rawPattern : breToEre(rawPattern));
 
       try {
-        const regex = new RegExp(pattern, flags);
-        const hasMatch = regex.test(state.patternSpace);
-        regex.lastIndex = 0;
-        if (hasMatch) {
-          state.substitutionMade = true;
-          if (cmd.nthOccurrence && cmd.nthOccurrence > 0 && !cmd.global) {
-            let count = 0;
-            const nthRegex = new RegExp(pattern, `g${cmd.ignoreCase ? "i" : ""}`);
-            state.patternSpace = state.patternSpace.replace(nthRegex, (match, ...args) => {
-              count++;
-              if (count === cmd.nthOccurrence) {
-                const groups = typeof args[args.length - 1] === 'object' ? args.slice(0, -3) : args.slice(0, -2);
-                return processReplacement(cmd.replacement, match, groups);
-              }
-              return match;
-            });
-          } else if (cmd.global) {
-            const globalRegex = new RegExp(pattern, `g${cmd.ignoreCase ? "i" : ""}`);
-            state.patternSpace = globalReplace(state.patternSpace, globalRegex, cmd.replacement, (match, groups) => processReplacement(cmd.replacement, match, groups));
-          } else {
-            state.patternSpace = state.patternSpace.replace(regex, (match, ...args) => {
-              const groups = typeof args[args.length - 1] === 'object' ? args.slice(0, -3) : args.slice(0, -2);
-              return processReplacement(cmd.replacement, match, groups);
-            });
+        const execRegex = new RegExp(pattern, "g" + (cmd.ignoreCase ? "i" : ""));
+        const testRegex = new RegExp(pattern, cmd.ignoreCase ? "i" : "");
+        if (testRegex.test(state.patternSpace)) {
+          const { result, matchedAny } = await doAsyncReplace(state.patternSpace, execRegex, cmd, shell);
+          if (matchedAny) {
+            state.substitutionMade = true;
+            state.patternSpace = result;
+            if (cmd.printOnMatch) state.lineNumberOutput.push(state.patternSpace);
           }
-          if (cmd.printOnMatch) state.lineNumberOutput.push(state.patternSpace);
         }
       } catch (e) { /* ignore */ }
       break;
@@ -244,7 +262,7 @@ async function executeCommand(cmd, state, shell=null) {
     case "insert": state.appendBuffer.unshift(`__INSERT__${cmd.text}`); break;
     case "change": state.deleted = true; state.changedText = cmd.text; break;
     case "hold": state.holdSpace = state.patternSpace; break;
-    case "holdAppend": state.holdSpace = state.holdSpace ? `${state.holdSpace}\n${state.patternSpace}` : state.patternSpace; break;
+    case "holdAppend": state.holdSpace += `\n${state.patternSpace}`; break;
     case "get": state.patternSpace = state.holdSpace; break;
     case "getAppend": state.patternSpace += `\n${state.holdSpace}`; break;
     case "exchange": { const temp = state.patternSpace; state.patternSpace = state.holdSpace; state.holdSpace = temp; break; }
@@ -257,33 +275,22 @@ async function executeCommand(cmd, state, shell=null) {
     case "readFileLine": state.pendingFileReads.push({ filename: cmd.filename, wholeFile: false }); break;
     case "writeFile": state.pendingFileWrites.push({ filename: cmd.filename, content: `${state.patternSpace}\n` }); break;
     case "writeFirstLine": { const newlineIdx = state.patternSpace.indexOf("\n"); state.pendingFileWrites.push({ filename: cmd.filename, content: `${newlineIdx !== -1 ? state.patternSpace.slice(0, newlineIdx) : state.patternSpace}\n` }); break; }
-    // Handling an unsupported command in the 'execute' case
-    case "execute":
-      if (shell && typeof shell === 'function') {
-            // The 'e' command (standalone)
-            if (cmd.command) {
-              // Scenario: e command (ignores pattern space, just emits output)
-              const output = await shell(cmd.command);
-              state.lineNumberOutput.push(output); 
-              break;
-            } else {
-              // Scenario: s/pattern/replacement/e (executes pattern space)
-              const output = await shell(state.patternSpace);
-              state.patternSpace = output.trimEnd();
-              break;
-            }
-      };
-      
-    state.errorMessage = "sed: e command is not supported in this environment";
-
-    state.quit = true;
-    break;
+    case "execute": {
+      if (cmd.command) {
+        if (shell) { let out = await shell(cmd.command); if (out.endsWith("\n")) out = out.slice(0, -1); state.lineNumberOutput.push(out); } 
+        else { state.errorMessage = "sed: e command requires a shell executor"; state.quit = true; }
+      } else {
+        if (shell) { let out = await shell(state.patternSpace); if (out.endsWith("\n")) out = out.slice(0, -1); state.patternSpace = out; } 
+        else { state.errorMessage = "sed: e command requires a shell executor"; state.quit = true; }
+      }
+      break;
+    }
     case "transliterate": { let result = ""; for (const char of state.patternSpace) { const idx = cmd.source.indexOf(char); result += idx !== -1 ? cmd.dest[idx] : char; } state.patternSpace = result; break; }
     case "lineNumber": state.lineNumberOutput.push(String(state.lineNumber)); break;
   }
 }
 
-async function executeCommands(commands, state, ctx) {
+async function executeCommands(commands, state, ctx, shell) {
   const labelIndex = new Map();
   for (let i = 0; i < commands.length; i++) if (commands[i].type === "label") labelIndex.set(commands[i].name, i);
   let i = 0;
@@ -330,7 +337,7 @@ async function executeCommands(commands, state, ctx) {
 
     if (cmd.type === "group") {
       if (isInRange(cmd.address, state.lineNumber, state.totalLines, state.patternSpace, state.rangeStates, state)) {
-        await executeCommands(cmd.commands, state, ctx);
+        await executeCommands(cmd.commands, state, ctx, shell);
         if (state.branchRequest) {
           const target = labelIndex.get(state.branchRequest);
           if (target !== undefined) { state.branchRequest = undefined; i = target; continue; }
@@ -340,7 +347,7 @@ async function executeCommands(commands, state, ctx) {
       i++; continue;
     }
 
-    await executeCommand(cmd, state, ctx.shell); i++;
+    await executeCommand(cmd, state, shell); i++;
   }
   return state.linesConsumedInCycle;
 }
@@ -350,12 +357,11 @@ async function executeCommands(commands, state, ctx) {
 // ==========================================
 
 async function processContent(content, commands, silent, options = {}) {
-  const { filename, vfs } = options;
-  const inputEndsWithNewline = content.endsWith("\n");
+  const { filename, vfs, shell } = options;
   const lines = content.split("\n");
   if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
 
-  const totalLines = lines.length; let output = ""; let exitCode; let lastOutputWasAutoPrint = false;
+  const totalLines = lines.length; let output = ""; let exitCode;
   const appendOutput = text => { output += text; };
 
   let holdSpace = ""; let lastPattern; const rangeStates = new Map();
@@ -363,19 +369,19 @@ async function processContent(content, commands, silent, options = {}) {
 
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
     const state = { ...createInitialState(totalLines, filename, rangeStates), patternSpace: lines[lineIndex], holdSpace, lastPattern, lineNumber: lineIndex + 1 };
-    const ctx = { lines, currentLineIndex: lineIndex, shell:options.shell };
+    const ctx = { lines, currentLineIndex: lineIndex };
 
     let cycleIterations = 0; state.linesConsumedInCycle = 0;
     do {
       cycleIterations++; if (cycleIterations > 10000) break;
-      state.restartCycle = false; state.pendingFileReads = []; state.pendingFileWrites =[];
-      await executeCommands(commands, state, ctx);
+      state.restartCycle = false; state.pendingFileReads =[]; state.pendingFileWrites =[];
+      await executeCommands(commands, state, ctx, shell);
 
       if (vfs) {
         for (const read of state.pendingFileReads) {
           const filePath = read.filename;
           try {
-            if (read.wholeFile) { if (vfs[filePath] !== undefined) state.appendBuffer.push(vfs[filePath].replace(/\n$/, "")); } 
+            if (read.wholeFile) { if (vfs[filePath] !== undefined) state.appendBuffer.push(vfs[filePath].replace(/\n$/, "")); }
             else {
               if (!fileLineCache.has(filePath)) { if (vfs[filePath] !== undefined) { fileLineCache.set(filePath, vfs[filePath].split("\n")); fileLinePositions.set(filePath, 0); } }
               const fileLines = fileLineCache.get(filePath); const pos = fileLinePositions.get(filePath);
@@ -390,22 +396,17 @@ async function processContent(content, commands, silent, options = {}) {
     lineIndex += state.linesConsumedInCycle; holdSpace = state.holdSpace; lastPattern = state.lastPattern;
 
     if (!silent) for (const ln of state.nCommandOutput) appendOutput(`${ln}\n`);
-    const hadLineNumberOutput = state.lineNumberOutput.length > 0;
     for (const ln of state.lineNumberOutput) appendOutput(`${ln}\n`);
 
     const inserts =[]; const appends =[];
     for (const item of state.appendBuffer) { if (item.startsWith("__INSERT__")) inserts.push(item.slice(10)); else appends.push(item); }
     for (const text of inserts) appendOutput(`${text}\n`);
 
-    let hadPatternSpaceOutput = false;
     if (!state.deleted && !state.quitSilent) {
-      if (silent) { if (state.printed) { appendOutput(`${state.patternSpace}\n`); hadPatternSpaceOutput = true; } } 
-      else { appendOutput(`${state.patternSpace}\n`); hadPatternSpaceOutput = true; }
-    } else if (state.changedText !== undefined) { appendOutput(`${state.changedText}\n`); hadPatternSpaceOutput = true; }
+      if (silent) { if (state.printed) appendOutput(`${state.patternSpace}\n`); }
+      else { appendOutput(`${state.patternSpace}\n`); }
+    } else if (state.changedText !== undefined) { appendOutput(`${state.changedText}\n`); }
     for (const text of appends) appendOutput(`${text}\n`);
-
-    const hadOutput = hadLineNumberOutput || hadPatternSpaceOutput;
-    lastOutputWasAutoPrint = hadOutput && appends.length === 0;
 
     if (state.quit || state.quitSilent) {
       if (state.exitCode !== undefined) exitCode = state.exitCode;
@@ -413,8 +414,10 @@ async function processContent(content, commands, silent, options = {}) {
     }
   }
 
-  if (vfs) { for (const [filePath, fileContent] of fileWrites) vfs[filePath] = fileContent; }
-  if (!inputEndsWithNewline && lastOutputWasAutoPrint && output.endsWith("\n")) output = output.slice(0, -1);
+  if (vfs) { for (const[filePath, fileContent] of fileWrites) vfs[filePath] = fileContent; }
+  
+  // Conform to `execa` stripFinalNewline defaults to perfectly align comparisons
+  if (output.endsWith("\n")) output = output.slice(0, -1);
   return { output, exitCode };
 }
 
@@ -428,7 +431,7 @@ function parseShellString(str) {
     const char = str[i];
     if (escape) { current += char; escape = false; continue; }
     if (char === '\\') { escape = true; current += char; continue; }
-    if (inQuotes) { if (char === quoteChar) inQuotes = false; else current += char; } 
+    if (inQuotes) { if (char === quoteChar) inQuotes = false; else current += char; }
     else {
       if (char === "'" || char === '"') { inQuotes = true; quoteChar = char; }
       else if (char === ' ' || char === '\t') { if (current.length > 0) { args.push(current); current = ''; } }
@@ -444,7 +447,8 @@ export default async function sed(commandStr, options = {}) {
   const vfs = options.vfs || {};
   const shell = options.shell || null;
   let stdin = options.stdin !== undefined ? options.stdin : "";
-  
+  if (stdin === null) stdin = "";
+
   const scripts =[]; let silent = false; let inPlace = false; let extendedRegex = false; const files = [];
   let implicitScript =[];
 
@@ -462,7 +466,7 @@ export default async function sed(commandStr, options = {}) {
       if (arg.includes("E") || arg.includes("r")) extendedRegex = true;
       if (arg.includes("e") && !arg.includes("n") && !arg.includes("i") && i + 1 < args.length) scripts.push(args[++i]);
     } else {
-      if (options.stdin !== undefined && !inPlace) { implicitScript.push(arg); } 
+      if (options.stdin !== undefined && !inPlace) { implicitScript.push(arg); }
       else {
         if (scripts.length === 0 && implicitScript.length === 0) implicitScript.push(arg);
         else files.push(arg);
@@ -473,7 +477,7 @@ export default async function sed(commandStr, options = {}) {
   if (implicitScript.length > 0) scripts.push(implicitScript.join(" "));
   if (scripts.length === 0) scripts.push("");
 
-  const { commands, error, silentMode, extendedRegexMode } = parseMultipleScripts(scripts, extendedRegex);
+  const { commands, error, silentMode } = parseMultipleScripts(scripts, extendedRegex);
   if (error) throw new Error(`sed: ${error}`);
 
   const effectiveSilent = !!(silent || silentMode);
@@ -484,7 +488,7 @@ export default async function sed(commandStr, options = {}) {
       if (file === "-") continue;
       if (!(file in vfs)) throw new Error(`sed: ${file}: No such file or directory`);
       const fileContent = vfs[file];
-      const result = await processContent(fileContent, commands, effectiveSilent, { filename: file, vfs, shell});
+      const result = await processContent(fileContent, commands, effectiveSilent, { filename: file, vfs, shell });
       if (result.errorMessage) throw new Error(result.errorMessage);
       vfs[file] = result.output;
     }
@@ -502,7 +506,7 @@ export default async function sed(commandStr, options = {}) {
   let stdinConsumed = false;
   for (const file of files) {
     let fileContent;
-    if (file === "-") { if (stdinConsumed) fileContent = ""; else { fileContent = stdin; stdinConsumed = true; } } 
+    if (file === "-") { if (stdinConsumed) fileContent = ""; else { fileContent = stdin; stdinConsumed = true; } }
     else {
       if (!(file in vfs)) throw new Error(`sed: ${file}: No such file or directory`);
       fileContent = vfs[file];
