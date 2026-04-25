@@ -1,8 +1,4 @@
-// ==========================================
-// 2. Lexer
-// ==========================================
-
-export const SedTokenType = {
+const SedTokenType = {
   NUMBER: "NUMBER", DOLLAR: "DOLLAR", PATTERN: "PATTERN", STEP: "STEP",
   RELATIVE_OFFSET: "RELATIVE_OFFSET", LBRACE: "LBRACE", RBRACE: "RBRACE",
   SEMICOLON: "SEMICOLON", NEWLINE: "NEWLINE", COMMA: "COMMA", NEGATION: "NEGATION",
@@ -79,10 +75,10 @@ export class SedLexer {
     while (this.pos < this.input.length) {
       const ch = this.peek();
       if (ch === "/" && !inBracket) break;
-      if (ch === "\\") { pattern += this.advance(); if (this.pos < this.input.length && this.peek() !== "\n") pattern += this.advance(); } 
+      if (ch === "\\") { pattern += this.advance(); if (this.pos < this.input.length && this.peek() !== "\n") pattern += this.advance(); }
       else if (ch === "\n") { break; }
-      else if (ch === "[" && !inBracket) { inBracket = true; pattern += this.advance(); if (this.peek() === "^") pattern += this.advance(); if (this.peek() === "]") pattern += this.advance(); } 
-      else if (ch === "]" && inBracket) { inBracket = false; pattern += this.advance(); } 
+      else if (ch === "[" && !inBracket) { inBracket = true; pattern += this.advance(); if (this.peek() === "^") pattern += this.advance(); if (this.peek() === "]") pattern += this.advance(); }
+      else if (ch === "]" && inBracket) { inBracket = false; pattern += this.advance(); }
       else { pattern += this.advance(); }
     }
     if (this.peek() === "/") this.advance();
@@ -123,12 +119,12 @@ export class SedLexer {
       if (ch === delimiter && !inBracket) break;
       if (ch === "\\") {
         this.advance();
-        if (this.pos < this.input.length && this.peek() !== "\n") { const escaped = this.peek(); if (escaped === delimiter && !inBracket) pattern += this.advance(); else { pattern += "\\"; pattern += this.advance(); } } 
+        if (this.pos < this.input.length && this.peek() !== "\n") { const escaped = this.peek(); if (escaped === delimiter && !inBracket) pattern += this.advance(); else { pattern += "\\"; pattern += this.advance(); } }
         else { pattern += "\\"; }
-      } 
+      }
       else if (ch === "\n") { break; }
-      else if (ch === "[" && !inBracket) { inBracket = true; pattern += this.advance(); if (this.peek() === "^") pattern += this.advance(); if (this.peek() === "]") pattern += this.advance(); } 
-      else if (ch === "]" && inBracket) { inBracket = false; pattern += this.advance(); } 
+      else if (ch === "[" && !inBracket) { inBracket = true; pattern += this.advance(); if (this.peek() === "^") pattern += this.advance(); if (this.peek() === "]") pattern += this.advance(); }
+      else if (ch === "]" && inBracket) { inBracket = false; pattern += this.advance(); }
       else { pattern += this.advance(); }
     }
     if (this.peek() !== delimiter) return { type: SedTokenType.ERROR, value: "unterminated substitution pattern", line: startLine, column: startColumn };
@@ -139,15 +135,23 @@ export class SedLexer {
         this.advance();
         if (this.pos < this.input.length) {
           const next = this.peek();
-          if (next === "\\") { this.advance(); if (this.pos < this.input.length && this.peek() === "\n") { replacement += "\n"; this.advance(); } else { replacement += "\\"; } } 
+          if (next === "\\") { this.advance(); if (this.pos < this.input.length && this.peek() === "\n") { replacement += "\n"; this.advance(); } else { replacement += "\\"; } }
           else if (next === "\n") { replacement += "\n"; this.advance(); } else { replacement += `\\${this.advance()}`; }
         } else { replacement += "\\"; }
       } else if (this.peek() === "\n") { break; } else { replacement += this.advance(); }
     }
     if (this.peek() === delimiter) this.advance();
     let flags = "";
-    while (this.pos < this.input.length) { const ch = this.peek(); if (["g", "i", "p", "I"].includes(ch) || this.isDigit(ch)) flags += this.advance(); else break; }
-    return { type: SedTokenType.SUBSTITUTE, value: `s${delimiter}${pattern}${delimiter}${replacement}${delimiter}${flags}`, pattern, replacement, flags, line: startLine, column: startColumn };
+    while (this.pos < this.input.length) { const ch = this.peek(); if (["g", "i", "p", "I", "e"].includes(ch) || this.isDigit(ch)) flags += this.advance(); else break; }
+    let nthOccurrence;
+    const numMatch = flags.match(/(\d+)/); if (numMatch) nthOccurrence = parseInt(numMatch[1], 10);
+    return {
+      type: SedTokenType.SUBSTITUTE, value: `s${delimiter}${pattern}${delimiter}${replacement}${delimiter}${flags}`,
+      pattern: pattern || "", replacement: replacement || "", flags,
+      global: flags.includes("g"), ignoreCase: flags.includes("i") || flags.includes("I"),
+      printOnMatch: flags.includes("p"), executeShell: flags.includes("e"), nthOccurrence,
+      line: startLine, column: startColumn
+    };
   }
   readTransliterate(startLine, startColumn) {
     const delimiter = this.advance();
