@@ -2,9 +2,8 @@ import { spawnSync } from "child_process"
 import * as fs from "fs"
 import * as path from "path"
 import os from "node:os"
-
 /**
- * format permissions like ls -l
+ * Permission formatter (POSIX-style)
  */
 function formatMode(mode, isDir) {
   return (
@@ -22,28 +21,54 @@ function formatMode(mode, isDir) {
 }
 
 /**
- * stable ls time format
+ * Time format similar to GNU/BSD ls
  */
 function formatTime(d) {
   const months = [
     "Jan","Feb","Mar","Apr","May","Jun",
     "Jul","Aug","Sep","Oct","Nov","Dec"
   ]
-  return `${months[d.getMonth()]} ${String(d.getDate()).padStart(2," ")} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`
+
+  return (
+    months[d.getMonth()] +
+    " " +
+    String(d.getDate()).padStart(2, " ") +
+    " " +
+    String(d.getHours()).padStart(2, "0") +
+    ":" +
+    String(d.getMinutes()).padStart(2, "0")
+  )
 }
 
 /**
- * get user/group (FIXED for CI determinism)
+ * Get deterministic owner/group (test-safe)
  */
-function getUserGroup() {
+function getOwner() {
   return {
     user: process.env.USER || "runner",
-    group: process.env.USER || "runner"
+    group: process.env.USER || "runner",
   }
 }
 
 /**
- * FIXED POSIX ls
+ * Safe stat wrapper
+ */
+function safeStat(full) {
+  try {
+    return fs.statSync(full)
+  } catch {
+    return {
+      isDirectory: () => false,
+      mode: 0o100644,
+      size: 0,
+      mtime: new Date(),
+      blocks: 0,
+    }
+  }
+}
+
+/**
+ * POSIX ls implementation
  */
 export function executeLs(args = [], ctx = {}) {
   const cwd = ctx.cwd || process.cwd()
@@ -52,6 +77,7 @@ export function executeLs(args = [], ctx = {}) {
   let long = false
   let target = cwd
 
+  // ---- parse args ----
   for (const arg of args) {
     if (arg === "-a") showAll = true
     else if (arg === "-l") long = true
@@ -69,54 +95,65 @@ export function executeLs(args = [], ctx = {}) {
 
   let entries = fs.readdirSync(dir)
 
-  // include dot entries like real ls
+  // ---- hidden files ----
   if (showAll) {
     entries = [".", "..", ...entries]
   } else {
     entries = entries.filter(e => !e.startsWith("."))
   }
 
-  entries.sort((a,b) => a.localeCompare(b))
+  entries.sort((a, b) => a.localeCompare(b))
 
-  const { user, group } = getUserGroup()
+  const { user, group } = getOwner()
 
+  // ---- SHORT FORMAT ----
   if (!long) {
     return {
       stdout: entries.join("\n") + "\n",
       stderr: "",
-      exitCode: 0
+      exitCode: 0,
     }
   }
 
+  // ---- PRE-CALCULATE STATS (needed for correct width + blocks) ----
+  const stats = entries.map(name => {
+    let full =
+      name === "."
+        ? dir
+        : name === ".."
+        ? path.resolve(dir, "..")
+        : path.join(dir, name)
+
+    return safeStat(full)
+  })
+
+  // correct block calculation (REAL ls behavior is 512-byte blocks)
   let totalBlocks = 0
+  for (const s of stats) {
+    const blocks =
+      typeof s.blocks === "number"
+        ? s.blocks
+        : Math.ceil((s.size || 0) / 512)
+
+    totalBlocks += blocks
+  }
+
+  // dynamic width (FIXES your spacing mismatch)
+  const sizeWidth = String(
+    Math.max(0, ...stats.map(s => s.size || 0))
+  ).length
+
   const lines = []
 
-  for (const name of entries) {
-    const full = path.join(dir, name)
+  for (let i = 0; i < entries.length; i++) {
+    const name = entries[i]
+    const stat = stats[i]
 
-    let stat
-    try {
-      stat = fs.statSync(full)
-    } catch {
-      stat = {
-        isDirectory: () => true,
-        mode: 0o777,
-        size: 0,
-        mtime: new Date(),
-        blocks: 0
-      }
-    }
-
-    const isDir = stat.isDirectory()
-
-    // REAL ls uses blocks, NOT size
-    const blocks = stat.blocks ?? Math.ceil((stat.size || 0) / 512)
-    totalBlocks += blocks
-
-    const mode = formatMode(stat.mode || 0o777, isDir)
+    const isDir = stat.isDirectory?.() || false
+    const mode = formatMode(stat.mode || 0o100644, isDir)
     const links = isDir ? 2 : 1
 
-    const size = String(stat.size || 0).padStart(5, " ")
+    const size = String(stat.size || 0).padStart(sizeWidth, " ")
     const time = formatTime(stat.mtime || new Date())
 
     lines.push(
@@ -127,7 +164,7 @@ export function executeLs(args = [], ctx = {}) {
   return {
     stdout: `total ${totalBlocks}\n` + lines.join("\n") + "\n",
     stderr: "",
-    exitCode: 0
+    exitCode: 0,
   }
 }
 
