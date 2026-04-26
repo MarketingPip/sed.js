@@ -27,8 +27,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          npm install --save @fortawesome/fontawesome-free
-          npm install --save copy-webpack-plugin
+          npm i -D cross-env
           npm install
 
       - name: Run tests
