@@ -2,57 +2,58 @@ import { spawnSync } from "child_process"
 import * as fs from "fs"
 import * as path from "path"
 import os from "node:os"
-/**
- * Permission formatter (POSIX-style)
- */
+
+
 function formatMode(mode, isDir) {
+  const type = isDir ? "d" : "-"
+
+  const u = (mode & 0o400) ? "r" : "-"
+  const g = (mode & 0o040) ? "r" : "-"
+  const o = (mode & 0o004) ? "r" : "-"
+
+  let ux = (mode & 0o100) ? "x" : "-"
+  let gx = (mode & 0o010) ? "x" : "-"
+  let ox = (mode & 0o001) ? "x" : "-"
+
+  // special bits
+  const setuid = (mode & 0o4000) !== 0
+  const setgid = (mode & 0o2000) !== 0
+  const sticky = (mode & 0o1000) !== 0
+
+  if (setuid) ux = ux === "x" ? "s" : "S"
+  if (setgid) gx = gx === "x" ? "s" : "S"
+  if (sticky) ox = ox === "x" ? "t" : "T"
+
   return (
-    (isDir ? "d" : "-") +
-    (mode & 0o400 ? "r" : "-") +
-    (mode & 0o200 ? "w" : "-") +
-    (mode & 0o100 ? "x" : "-") +
-    (mode & 0o040 ? "r" : "-") +
-    (mode & 0o020 ? "w" : "-") +
-    (mode & 0o010 ? "x" : "-") +
-    (mode & 0o004 ? "r" : "-") +
-    (mode & 0o002 ? "w" : "-") +
-    (mode & 0o001 ? "x" : "-")
+    type +
+    u + ((mode & 0o200) ? "w" : "-") + ux +
+    g + ((mode & 0o020) ? "w" : "-") + gx +
+    o + ((mode & 0o002) ? "w" : "-") + ox
   )
 }
 
-/**
- * Time format similar to GNU/BSD ls
- */
 function formatTime(d) {
-  const months = [
-    "Jan","Feb","Mar","Apr","May","Jun",
-    "Jul","Aug","Sep","Oct","Nov","Dec"
-  ]
-
+  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
   return (
     months[d.getMonth()] +
-    " " +
-    String(d.getDate()).padStart(2, " ") +
-    " " +
-    String(d.getHours()).padStart(2, "0") +
-    ":" +
-    String(d.getMinutes()).padStart(2, "0")
+    " " + String(d.getDate()).padStart(2, " ") +
+    " " + String(d.getHours()).padStart(2, "0") +
+    ":" + String(d.getMinutes()).padStart(2, "0")
   )
 }
 
-/**
- * Get deterministic owner/group (test-safe)
- */
-function getOwner() {
-  return {
-    user: process.env.USER || "runner",
-    group: process.env.USER || "runner",
-  }
+function getUserName(uid) {
+  if (uid === 0) return "root"
+  if (uid === process.getuid?.()) return process.env.USER || "runner"
+  return process.env.USER || "runner"
 }
 
-/**
- * Safe stat wrapper
- */
+function getGroupName(gid) {
+  if (gid === 0) return "root"
+  if (gid === process.getgid?.()) return process.env.USER || "runner"
+  return process.env.USER || "runner"
+}
+
 function safeStat(full) {
   try {
     return fs.statSync(full)
@@ -63,6 +64,9 @@ function safeStat(full) {
       size: 0,
       mtime: new Date(),
       blocks: 0,
+      nlink: 1,
+      uid: process.getuid?.() ?? 1000,
+      gid: process.getgid?.() ?? 1000,
     }
   }
 }
@@ -117,7 +121,7 @@ export function executeLs(args = [], ctx = {}) {
 
   // ---- PRE-CALCULATE STATS (needed for correct width + blocks) ----
   const stats = entries.map(name => {
-    let full =
+    const full =
       name === "."
         ? dir
         : name === ".."
@@ -127,21 +131,18 @@ export function executeLs(args = [], ctx = {}) {
     return safeStat(full)
   })
 
-  // correct block calculation (REAL ls behavior is 512-byte blocks)
-  let totalBlocks = 0
-  for (const s of stats) {
-    const blocks =
-      typeof s.blocks === "number"
-        ? s.blocks
-        : Math.ceil((s.size || 0) / 512)
+  // GNU ls-style 1K blocks
+  const totalBlocks = stats.reduce((sum, s) => {
+    const blocks512 = typeof s.blocks === "number" ? s.blocks : Math.ceil((s.size || 0) / 512)
+    return sum + Math.ceil(blocks512 / 2)
+  }, 0)
 
-    totalBlocks += blocks
-  }
-
-  // dynamic width (FIXES your spacing mismatch)
-  const sizeWidth = String(
-    Math.max(0, ...stats.map(s => s.size || 0))
-  ).length
+  const linkWidth = String(Math.max(...stats.map(s => s.nlink || 1))).length
+  const userNames = stats.map(s => getUserName(s.uid ?? 0))
+  const groupNames = stats.map(s => getGroupName(s.gid ?? 0))
+  const sizeWidth = String(Math.max(...stats.map(s => s.size || 0))).length
+  const userWidth = Math.max(...userNames.map(s => s.length))
+  const groupWidth = Math.max(...groupNames.map(s => s.length))
 
   const lines = []
 
@@ -151,14 +152,13 @@ export function executeLs(args = [], ctx = {}) {
 
     const isDir = stat.isDirectory?.() || false
     const mode = formatMode(stat.mode || 0o100644, isDir)
-    const links = isDir ? 2 : 1
-
+    const nlink = String(stat.nlink ?? (isDir ? 2 : 1)).padStart(linkWidth, " ")
+    const user = userNames[i].padEnd(userWidth, " ")
+    const group = groupNames[i].padEnd(groupWidth, " ")
     const size = String(stat.size || 0).padStart(sizeWidth, " ")
     const time = formatTime(stat.mtime || new Date())
 
-    lines.push(
-      `${mode} ${links} ${user} ${group} ${size} ${time} ${name}`
-    )
+    lines.push(`${mode} ${nlink} ${user} ${group} ${size} ${time} ${name}`)
   }
 
   return {
@@ -166,7 +166,6 @@ export function executeLs(args = [], ctx = {}) {
     stderr: "",
     exitCode: 0,
   }
-}
 
 // --- REAL BASH COMPARISON ---
 
