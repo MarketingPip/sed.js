@@ -225,3 +225,4 @@ describe("ls command - real bash comparison", () => {
     await run(["-l", "-a"])
   })
 })
+}
