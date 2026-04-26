@@ -307,11 +307,7 @@ class SedLexer {
     let text = "";
     while (this.pos < this.input.length) {
       const ch = this.peek();
-      if (ch === "\n") {
-        this.advance();
-        text += "\n";
-        continue;
-      }
+      if (ch === "\n") { if (text.endsWith("\\")) { text = `${text.slice(0, -1)}\n`; this.advance(); continue; } break; }
       if (ch === "\\" && this.pos + 1 < this.input.length) {
         const next = this.input[this.pos + 1];
         if (next === "n") { text += "\n"; this.advance(); this.advance(); continue; }
@@ -730,12 +726,7 @@ async function executeCommand(cmd, state, shell) {
     case "insert": state.appendBuffer.unshift(`__INSERT__${cmd.text}`); break;
     case "change": state.deleted = true; state.changedText = cmd.text; break;
     case "hold": state.holdSpace = state.patternSpace; break;
-    case "holdAppend":
-    state.holdSpace =
-      state.holdSpace.length > 0
-        ? state.holdSpace + "\n" + state.patternSpace
-        : state.patternSpace;
-    break;
+    case "holdAppend": state.holdSpace = state.holdSpace ? `${state.holdSpace}\n${state.patternSpace}` : state.patternSpace; break;
     case "get": state.patternSpace = state.holdSpace; break;
     case "getAppend": state.patternSpace += `\n${state.holdSpace}`; break;
     case "exchange": { const temp = state.patternSpace; state.patternSpace = state.holdSpace; state.holdSpace = temp; break; }
@@ -889,6 +880,7 @@ async function processContent(content, commands, silent, options = {}) {
 
   if (vfs) { for (const[filePath, fileContent] of fileWrites) vfs[filePath] = fileContent; }
   
+  if (output.endsWith("\n")) output = output.slice(0, -1);
   return { output, exitCode };
 }
 
