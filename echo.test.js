@@ -15,7 +15,9 @@ function processEscapes(input) {
         result += "\\"
         break
       }
+
       const next = input[i + 1]
+
       switch (next) {
         case "\\":
           result += "\\"
@@ -55,8 +57,10 @@ function processEscapes(input) {
           i += 2
           break
         case "c":
+          // \c stops output and suppresses trailing newline
           return { output: result, stop: true }
         case "0": {
+          // \0NNN - octal (up to 3 digits after the 0)
           let octal = ""
           let j = i + 2
           while (j < input.length && j < i + 5 && /[0-7]/.test(input[j])) {
@@ -64,6 +68,7 @@ function processEscapes(input) {
             j++
           }
           if (octal.length === 0) {
+            // \0 alone is NUL
             result += "\0"
           } else {
             const code = parseInt(octal, 8) % 256
@@ -73,6 +78,7 @@ function processEscapes(input) {
           break
         }
         case "x": {
+          // \xHH - hex (1-2 hex digits)
           let hex = ""
           let j = i + 2
           while (
@@ -84,6 +90,7 @@ function processEscapes(input) {
             j++
           }
           if (hex.length === 0) {
+            // \x with no valid hex digits - output literally
             result += "\\x"
             i += 2
           } else {
@@ -94,6 +101,7 @@ function processEscapes(input) {
           break
         }
         case "u": {
+          // \uHHHH - 4-digit unicode
           let hex = ""
           let j = i + 2
           while (
@@ -115,6 +123,7 @@ function processEscapes(input) {
           break
         }
         case "U": {
+          // \UHHHHHHHH - 8-digit unicode
           let hex = ""
           let j = i + 2
           while (
@@ -133,6 +142,7 @@ function processEscapes(input) {
             try {
               result += String.fromCodePoint(code)
             } catch {
+              // Invalid code point, output as-is
               result += `\\U${hex}`
             }
             i = j
@@ -140,6 +150,7 @@ function processEscapes(input) {
           break
         }
         default:
+          // Unknown escape - keep the backslash and character
           result += `\\${next}`
           i += 2
       }
@@ -148,8 +159,10 @@ function processEscapes(input) {
       i++
     }
   }
+
   return { output: result, stop: false }
 }
+
 
 /**
  * The echo command execution logic
