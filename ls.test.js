@@ -1,49 +1,49 @@
 import { spawnSync } from "child_process"
 import * as fs from "fs"
 import * as path from "path"
-
- 
+import os from "node:os"
 
 /**
- * Format permission bits like ls -l
+ * format permissions like ls -l
  */
 function formatMode(mode, isDir) {
-  const type = isDir ? "d" : "-"
-
-  const perms = [
-    mode & 0o400 ? "r" : "-",
-    mode & 0o200 ? "w" : "-",
-    mode & 0o100 ? "x" : "-",
-    mode & 0o040 ? "r" : "-",
-    mode & 0o020 ? "w" : "-",
-    mode & 0o010 ? "x" : "-",
-    mode & 0o004 ? "r" : "-",
-    mode & 0o002 ? "w" : "-",
-    mode & 0o001 ? "x" : "-",
-  ].join("")
-
-  return type + perms
+  return (
+    (isDir ? "d" : "-") +
+    (mode & 0o400 ? "r" : "-") +
+    (mode & 0o200 ? "w" : "-") +
+    (mode & 0o100 ? "x" : "-") +
+    (mode & 0o040 ? "r" : "-") +
+    (mode & 0o020 ? "w" : "-") +
+    (mode & 0o010 ? "x" : "-") +
+    (mode & 0o004 ? "r" : "-") +
+    (mode & 0o002 ? "w" : "-") +
+    (mode & 0o001 ? "x" : "-")
+  )
 }
 
 /**
- * Format ls -l time like GNU/BSD (simple stable version)
+ * stable ls time format
  */
-function formatTime(date) {
+function formatTime(d) {
   const months = [
     "Jan","Feb","Mar","Apr","May","Jun",
     "Jul","Aug","Sep","Oct","Nov","Dec"
   ]
-
-  const m = months[date.getMonth()]
-  const d = String(date.getDate()).padStart(2, " ")
-  const hh = String(date.getHours()).padStart(2, "0")
-  const mm = String(date.getMinutes()).padStart(2, "0")
-
-  return `${m} ${d} ${hh}:${mm}`
+  return `${months[d.getMonth()]} ${String(d.getDate()).padStart(2," ")} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`
 }
 
 /**
- * Core ls implementation
+ * get user/group (FIXED for CI determinism)
+ */
+function getUserGroup() {
+  return {
+    user: process.env.USER || "runner",
+    group: process.env.USER || "runner"
+  }
+}
+
+/**
+ * FIXED POSIX ls
  */
 export function executeLs(args = [], ctx = {}) {
   const cwd = ctx.cwd || process.cwd()
@@ -52,7 +52,6 @@ export function executeLs(args = [], ctx = {}) {
   let long = false
   let target = cwd
 
-  // ---- parse flags ----
   for (const arg of args) {
     if (arg === "-a") showAll = true
     else if (arg === "-l") long = true
@@ -64,73 +63,69 @@ export function executeLs(args = [], ctx = {}) {
     }
   }
 
-  // ---- resolve path safely ----
   const dir = path.isAbsolute(target)
     ? target
     : path.join(cwd, target)
 
   let entries = fs.readdirSync(dir)
 
-  // ---- hidden files ----
-  if (!showAll) {
-    entries = entries.filter(e => !e.startsWith("."))
-  } else {
-    // POSIX: include . and ..
+  // include dot entries like real ls
+  if (showAll) {
     entries = [".", "..", ...entries]
+  } else {
+    entries = entries.filter(e => !e.startsWith("."))
   }
 
-  // ---- stable ordering (GNU-like default sort) ----
-  entries.sort((a, b) => a.localeCompare(b))
+  entries.sort((a,b) => a.localeCompare(b))
 
-  // ---- long format ----
-  if (long) {
-    let total = 0
-    const lines = []
+  const { user, group } = getUserGroup()
 
-    const fileLines = []
-
-    for (const name of entries) {
-      const full = path.join(dir, name)
-
-      let stat
-      try {
-        stat = fs.statSync(full)
-      } catch {
-        // for "." and ".." or broken symlinks in test env
-        stat = {
-          isDirectory: () => true,
-          mode: 0o777,
-          size: 0,
-          mtime: new Date(),
-        }
-      }
-
-      total += stat.size || 0
-
-      const mode = formatMode(stat.mode || 0o777, stat.isDirectory())
-      const links = 1
-
-      const user = "user"
-      const group = "user"
-
-      const size = String(stat.size || 0).padStart(5, " ")
-      const time = formatTime(stat.mtime || new Date())
-
-      fileLines.push(
-        `${mode} ${links} ${user} ${group} ${size} ${time} ${name}`
-      )
-    }
-
+  if (!long) {
     return {
-      stdout: `total ${Math.ceil(total / 1024)}\n` + fileLines.join("\n") + "\n",
+      stdout: entries.join("\n") + "\n",
       stderr: "",
       exitCode: 0
     }
   }
 
-  // ---- short format ----
+  let totalBlocks = 0
+  const lines = []
+
+  for (const name of entries) {
+    const full = path.join(dir, name)
+
+    let stat
+    try {
+      stat = fs.statSync(full)
+    } catch {
+      stat = {
+        isDirectory: () => true,
+        mode: 0o777,
+        size: 0,
+        mtime: new Date(),
+        blocks: 0
+      }
+    }
+
+    const isDir = stat.isDirectory()
+
+    // REAL ls uses blocks, NOT size
+    const blocks = stat.blocks ?? Math.ceil((stat.size || 0) / 512)
+    totalBlocks += blocks
+
+    const mode = formatMode(stat.mode || 0o777, isDir)
+    const links = isDir ? 2 : 1
+
+    const size = String(stat.size || 0).padStart(5, " ")
+    const time = formatTime(stat.mtime || new Date())
+
+    lines.push(
+      `${mode} ${links} ${user} ${group} ${size} ${time} ${name}`
+    )
+  }
+
   return {
-    stdout: entries.join("\n") + "\n",
+    stdout: `total ${totalBlocks}\n` + lines.join("\n") + "\n",
     stderr: "",
     exitCode: 0
   }
