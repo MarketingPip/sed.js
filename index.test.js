@@ -802,3 +802,171 @@ describe('Advanced / Missing Coverage', () => {
     });
   });
 });
+
+
+// advanced.test.js
+
+describe('Advanced Commands (Additional Coverage)', () => {
+  describe('N command (append next line)', () => {
+    it('joins pairs of lines (even count)', async () => {
+      await expectSameSedOutput({
+        portCommand: 'N; s/\\n/ /',
+        systemArgs: ['N; s/\\n/ /'],
+        stdin: 'line1\nline2\nline3\nline4',
+      });
+    });
+
+    it('handles odd number of lines (auto-print on EOF)', async () => {
+      await expectSameSedOutput({
+        portCommand: 'N; s/\\n/ /',
+        systemArgs: ['N; s/\\n/ /'],
+        stdin: 'line1\nline2\nline3',
+      });
+    });
+
+    it('joins with custom separator', async () => {
+      await expectSameSedOutput({
+        portCommand: 'N; s/\\n/,/',
+        systemArgs: ['N; s/\\n/,/'],
+        stdin: 'a\nb\nc\nd',
+      });
+    });
+  });
+
+  describe('y (transliteration)', () => {
+    it('lowercase to uppercase', async () => {
+      await expectSameSedOutput({
+        portCommand:
+          'y/abcdefghijklmnopqrstuvwxyz/ABCDEFGHIJKLMNOPQRSTUVWXYZ/',
+        systemArgs: [
+          'y/abcdefghijklmnopqrstuvwxyz/ABCDEFGHIJKLMNOPQRSTUVWXYZ/',
+        ],
+        stdin: 'hello world',
+      });
+    });
+
+    it('character rotation', async () => {
+      await expectSameSedOutput({
+        portCommand: 'y/abc/bca/',
+        systemArgs: ['y/abc/bca/'],
+        stdin: 'abc',
+      });
+    });
+
+    it('handles escape sequences', async () => {
+      await expectSameSedOutput({
+        portCommand: 'y/\\t/ /',
+        systemArgs: ['y/\\t/ /'],
+        stdin: 'a\tb',
+      });
+    });
+  });
+
+  describe('= (line number)', () => {
+    it('prints line numbers for all lines', async () => {
+      await expectSameSedOutput({
+        portCommand: '=',
+        systemArgs: ['='],
+        stdin: 'a\nb\nc',
+      });
+    });
+
+    it('prints line number for addressed line', async () => {
+      await expectSameSedOutput({
+        portCommand: '2=',
+        systemArgs: ['2='],
+        stdin: 'a\nb\nc',
+      });
+    });
+  });
+
+  describe('Branching (b, t, labels)', () => {
+    it('unconditional branch skips commands', async () => {
+      await expectSameSedOutput({
+        portCommand: 'b; d',
+        systemArgs: ['b; d'],
+        stdin: 'hello\nworld',
+      });
+    });
+
+    it('branch to label', async () => {
+      await expectSameSedOutput({
+        portCommand: 'b skip; d; :skip',
+        systemArgs: ['b skip; d; :skip'],
+        stdin: 'hello\nworld',
+      });
+    });
+
+    it('conditional branch (t)', async () => {
+      await expectSameSedOutput({
+        portCommand: 's/hello/HELLO/; t; d',
+        systemArgs: ['s/hello/HELLO/; t; d'],
+        stdin: 'hello\nworld',
+      });
+    });
+
+    it('conditional branch to label', async () => {
+      await expectSameSedOutput({
+        portCommand: 's/hello/HELLO/; t done; s/world/WORLD/; :done',
+        systemArgs: ['s/hello/HELLO/; t done; s/world/WORLD/; :done'],
+        stdin: 'hello\nworld',
+      });
+    });
+  });
+
+  describe('-f (script file)', () => {
+    it('executes script from file', async () => {
+      const scriptPath = path.join(tmpDir, 'script.sed');
+
+      await fs.writeFile(
+        scriptPath,
+        's/hello/HELLO/\ns/world/WORLD/\n'
+      );
+
+      await expectSameSedOutput({
+        portCommand: `-f ${scriptPath}`,
+        systemArgs: ['-f', scriptPath],
+        stdin: 'hello world',
+      });
+    });
+
+    it('ignores comments in script file', async () => {
+      const scriptPath = path.join(tmpDir, 'script-comments.sed');
+
+      await fs.writeFile(
+        scriptPath,
+        '# comment\ns/hello/HELLO/\n'
+      );
+
+      await expectSameSedOutput({
+        portCommand: `-f ${scriptPath}`,
+        systemArgs: ['-f', scriptPath],
+        stdin: 'hello',
+      });
+    });
+
+    it('combines -f and -e', async () => {
+      const scriptPath = path.join(tmpDir, 'script-mixed.sed');
+
+      await fs.writeFile(scriptPath, 's/hello/HELLO/\n');
+
+      await expectSameSedOutput({
+        portCommand: `-f ${scriptPath} -e 's/world/WORLD/'`,
+        systemArgs: ['-f', scriptPath, '-e', 's/world/WORLD/'],
+        stdin: 'hello world',
+      });
+    });
+
+    it('errors on missing script file', async () => {
+      const missing = path.join(tmpDir, 'nope.sed');
+
+      const port = await runSed(`-f ${missing}`, 'hello');
+      const system = await runSystemSed(['-f', missing], 'hello');
+
+      expect(port.success).toBe(false);
+      expect(system.success).toBe(false);
+      expect(port.error).toMatch(/nope\.sed/i);
+      expect(system.error).toMatch(/nope\.sed/i);
+    });
+  });
+});
