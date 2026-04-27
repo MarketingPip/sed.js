@@ -893,7 +893,7 @@ async function processContent(content, commands, silent, options = {}) {
 // 6. Public API / CLI Arg Parser
 // ==========================================
 
-function parseShellString(input) {
+function parseShellString2(input) {
   if (!input || input.trim() === '') return [];
   
   const tokens = [];
@@ -1027,7 +1027,7 @@ function parseShellString(input) {
 }
  
 
-function parseShellString2(str) {
+function parseShellString(str) {
   const args = [];
   let current = '';
   let inQuotes = false;
@@ -1050,19 +1050,6 @@ function parseShellString2(str) {
   }
   if (current.length > 0) args.push(current);
 
-  // Re-join any token that ends with a bare a/i/c command (with optional
-  // address prefix) with all subsequent tokens, because a/i/c consume the
-  // rest of the line as their text argument and must not be word-split.
-  // e.g. ['/two/a', 'AFTER'] → ['/two/a AFTER']
-  const textCmdRe = /(?:^|[^\\])(?:\d+|\/[^/]*\/)?[aic]$/;
-  for (let i = 0; i < args.length - 1; i++) {
-    if (textCmdRe.test(args[i])) {
-      const joined = args.splice(i, args.length - i).join(' ');
-      args.push(joined);
-      break;
-    }
-  }
-
   return args;
 }
 
@@ -1073,8 +1060,8 @@ export default async function sed(commandStr, options = {}) {
   let stdin = options.stdin !== undefined ? options.stdin : "";
   if (stdin === null) stdin = "";
 
-  const scripts =[]; let silent = false; let inPlace = false; let extendedRegex = false; const files =[];
-  let implicitScript =[];
+  const scripts = []; let silent = false; let inPlace = false; let extendedRegex = false; const files = [];
+  let implicitScript = [];
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -1090,11 +1077,23 @@ export default async function sed(commandStr, options = {}) {
       if (arg.includes("E") || arg.includes("r")) extendedRegex = true;
       if (arg.includes("e") && !arg.includes("n") && !arg.includes("i") && i + 1 < args.length) scripts.push(args[++i]);
     } else {
-      if (options.stdin !== undefined && options.stdin !== null && !inPlace) { implicitScript.push(arg); }
-      else {
+      if (inPlace || options.stdin === undefined || options.stdin === null) {
         if (scripts.length === 0 && implicitScript.length === 0) implicitScript.push(arg);
         else files.push(arg);
+      } else {
+        implicitScript.push(arg);
       }
+    }
+  }
+
+  // If the implicit script ends with a bare a/i/c command, the text argument
+  // was split off as the first file. Move it back onto the script.
+  const pendingTextCmd = /(?:^|;|\{|\n)\s*(?:[^;{}]*,\s*)?[^;{}\s]*\s*[aic]\s*$/;
+  while (implicitScript.length > 0 && files.length > 0) {
+    if (pendingTextCmd.test(implicitScript.join(' '))) {
+      implicitScript.push(files.shift());
+    } else {
+      break;
     }
   }
 
