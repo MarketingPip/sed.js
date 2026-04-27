@@ -53,6 +53,7 @@ async function runSed(command, stdin = null, shell = fakeShell) {
       error: normalizeEol(err?.message || err?.stderr || String(err)),
     };
   }
+}
 
 async function runSystemSed(args, stdin = null) {
   try {
