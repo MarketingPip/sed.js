@@ -979,3 +979,185 @@ describe('-f (script file)', () => {
   });
   });
 });
+
+
+describe('Error Handling', () => {
+  describe('File Errors', () => {
+    it('non-existent file', async () => {
+      const port = await runSed('s/a/b/ nope.txt');
+      const system = await runSystemSed(['s/a/b/', path.join(tmpDir, 'nope.txt')]);
+
+      expect(port.success).toBe(false);
+      expect(system.success).toBe(false);
+
+      expect(port.error.toLowerCase()).toContain('nope');
+      expect(system.error.toLowerCase()).toContain('nope');
+    });
+
+    it('multiple non-existent files', async () => {
+      const port = await runSed('s/a/b/ no1.txt no2.txt');
+      const system = await runSystemSed(
+        ['s/a/b/', path.join(tmpDir, 'no1.txt'), path.join(tmpDir, 'no2.txt')]
+      );
+
+      expect(port.success).toBe(false);
+      expect(system.success).toBe(false);
+    });
+
+    it('non-existent script file (-f)', async () => {
+      const port = await runSed('-f missing.sed', 'hello');
+      const system = await runSystemSed(
+        ['-f', path.join(tmpDir, 'missing.sed')],
+        'hello'
+      );
+
+      expect(port.success).toBe(false);
+      expect(system.success).toBe(false);
+    });
+  });
+
+  describe('Script Parsing Errors', () => {
+    it('missing script', async () => {
+      const port = await runSed('');
+      expect(port.success).toBe(false);
+    });
+
+    it('unterminated substitution does not crash', async () => {
+      const port = await runSed("s/foo/bar", "foo");
+      expect(port).toBeDefined();
+    });
+
+    it('unknown command handled gracefully', async () => {
+      const port = await runSed("z", "hello");
+      expect(port).toBeDefined();
+    });
+
+    it('unknown flag handled gracefully', async () => {
+      const port = await runSed("s/a/b/z", "aaa");
+      expect(port).toBeDefined();
+    });
+  });
+
+  describe('Address Errors', () => {
+    it('line 0 address does not crash', async () => {
+      const port = await runSed("0d", "a\nb\nc");
+      expect(port).toBeDefined();
+    });
+
+    it('malformed range errors', async () => {
+      const port = await runSed("-n ,3p", "a\nb\nc");
+      expect(port.success).toBe(false);
+    });
+
+    it('malformed regex address', async () => {
+      const port = await runSed("/foo d", "a\nb\nc");
+      expect(port.success).toBe(false);
+    });
+
+    it('unknown POSIX class does not crash', async () => {
+      const port = await runSed("/[[:invalid:]]/d", "a\nb\nc");
+      expect(port).toBeDefined();
+    });
+  });
+
+  describe('Label Errors', () => {
+    it('branch to undefined label', async () => {
+      const port = await runSed("b missing", "a\nb");
+      const system = await runSystemSed(["b missing"], "a\nb");
+
+      expect(port.success).toBe(false);
+      expect(system.success).toBe(false);
+    });
+
+    it('t with undefined label', async () => {
+      const port = await runSed("t missing", "a\nb");
+      const system = await runSystemSed(["t missing"], "a\nb");
+
+      expect(port.success).toBe(false);
+      expect(system.success).toBe(false);
+    });
+  });
+
+  describe('Option Errors', () => {
+    it('unknown short option', async () => {
+      const system = await runSystemSed(['-z', 's/a/b/'], 'a');
+
+      const port = await runSed('-z s/a/b/', 'a');
+
+      expect(system.success).toBe(false);
+      expect(port.success).toBe(false);
+    });
+
+    it('unknown long option', async () => {
+      const system = await runSystemSed(['--unknown', 's/a/b/'], 'a');
+      const port = await runSed('--unknown s/a/b/', 'a');
+
+      expect(system.success).toBe(false);
+      expect(port.success).toBe(false);
+    });
+
+    it('-e without argument', async () => {
+      const port = await runSed('-e', 'a');
+      expect(port.success).toBe(false);
+    });
+  });
+
+  describe('Regex Errors', () => {
+    it('invalid regex pattern', async () => {
+      const port = await runSed("s/[/x/", "a");
+      expect(port.success).toBe(false);
+    });
+
+    it('invalid backreference is tolerated', async () => {
+      const port = await runSed("s/foo/\\9/", "foo");
+      expect(port.success).toBe(true); // sed is lenient
+    });
+
+    it('unescaped parentheses in BRE are literal', async () => {
+      const port = await runSed("s/(foo)/[\\1]/", "foo");
+      expect(port.success).toBe(true);
+    });
+  });
+
+  describe('y Command Errors', () => {
+    it('mismatched lengths error', async () => {
+      const port = await runSed("y/abc/xy/", "abc");
+      expect(port.success).toBe(false);
+    });
+
+    it('unterminated y command', async () => {
+      const port = await runSed("y/abc/xyz", "abc");
+      expect(port.success).toBe(false);
+    });
+  });
+
+  describe('Block Syntax', () => {
+    it('valid block executes', async () => {
+      await expectSameSedOutput({
+        portCommand: '1{d;}',
+        systemArgs: ['1{d;}'],
+        stdin: 'line 1\nline 2\nline 3',
+      });
+    });
+
+    it('nested commands inside block', async () => {
+      await expectSameSedOutput({
+        portCommand: '1{s/1/X/;}',
+        systemArgs: ['1{s/1/X/;}'],
+        stdin: 'line 1\nline 2',
+      });
+    });
+  });
+
+  describe('Step Address Edge Cases', () => {
+    it('step 0 does not crash', async () => {
+      const port = await runSed("1~0d", "1\n2\n3");
+      expect(port).toBeDefined();
+    });
+
+    it('negative step errors', async () => {
+      const port = await runSed("1~-1d", "1\n2\n3");
+      expect(port.success).toBe(false);
+    });
+  });
+});
