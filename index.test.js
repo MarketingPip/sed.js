@@ -42,7 +42,7 @@ async function runSed(command, stdin = null, shell = fakeShell) {
   try {
     const result = await sed(command, stdin === null || stdin === undefined
       ? { vfs: myVfs, shell }
-      : { stdin, shell });
+      : { stdin, vfs: {},  shell });
 
     return { success: true, data: normalizeEol(result), error: null };
   } catch (err) {
