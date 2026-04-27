@@ -15,7 +15,9 @@ const myVfs = {
   'multi.txt': 'one\ntwo\nthree\nfour\nfive',
   'empty.txt': '',
   'numbers.txt': '1\n2\n3\n4\n5\n6\n7\n8\n9\n10',
+  'script-comments.sed':  '# comment\ns/hello/HELLO/\n' 
 };
+ 
 
 async function fakeShell(cmd) {
   if (cmd === 'whoami') return 'user';
@@ -38,12 +40,13 @@ async function mirrorVfsToRealFs(vfs, dir) {
   );
 }
 
+
 async function runSed(command, stdin = null, shell = fakeShell) {
   try {
-    const result = await sed(command, stdin === null || stdin === undefined
-      ? { vfs: myVfs, shell }
-      : { stdin, vfs: {},  shell });
+    const opts = { vfs: myVfs, shell };
+    if (stdin !== null && stdin !== undefined) opts.stdin = stdin;
 
+    const result = await sed(command, opts);
     return { success: true, data: normalizeEol(result), error: null };
   } catch (err) {
     return {
@@ -915,8 +918,6 @@ describe('Advanced Commands (Additional Coverage)', () => {
 
 describe('-f (script file)', () => {
   it('executes script from file', async () => {
-    myVfs['script.sed'] = 's/hello/HELLO/\ns/world/WORLD/\n';
-
     const realPath = path.join(tmpDir, 'script.sed');
     await fs.writeFile(realPath, myVfs['script.sed']);
 
@@ -928,8 +929,6 @@ describe('-f (script file)', () => {
   });
 
   it('ignores comments in script file', async () => {
-    myVfs['script-comments.sed'] = '# comment\ns/hello/HELLO/\n';
-
     const realPath = path.join(tmpDir, 'script-comments.sed');
     await fs.writeFile(realPath, myVfs['script-comments.sed']);
 
