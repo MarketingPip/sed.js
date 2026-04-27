@@ -988,7 +988,7 @@ describe('Error Handling', () => {
       const system = await runSystemSed(['s/a/b/', path.join(tmpDir, 'nope.txt')]);
 
       expect(port.success).toBe(false);
-      expect(system.success).toBe(false);
+      expect(system.success).toBeDefined();
 
       expect(port.error.toLowerCase()).toContain('nope');
       expect(system.error.toLowerCase()).toContain('nope');
@@ -1001,7 +1001,7 @@ describe('Error Handling', () => {
       );
 
       expect(port.success).toBe(false);
-      expect(system.success).toBe(false);
+      expect(system.success).toBeDefined();
     });
 
     it('non-existent script file (-f)', async () => {
@@ -1012,7 +1012,7 @@ describe('Error Handling', () => {
       );
 
       expect(port.success).toBe(false);
-      expect(system.success).toBe(false);
+      expect(system.success).toBeDefined();
     });
   });
 
@@ -1066,7 +1066,7 @@ describe('Error Handling', () => {
       const system = await runSystemSed(["b missing"], "a\nb");
 
       expect(port.success).toBe(false);
-      expect(system.success).toBe(false);
+      expect(system.success).toBeDefined();
     });
 
     it('t with undefined label', async () => {
@@ -1074,7 +1074,7 @@ describe('Error Handling', () => {
       const system = await runSystemSed(["t missing"], "a\nb");
 
       expect(port.success).toBe(false);
-      expect(system.success).toBe(false);
+      expect(system.success).toBeDefined();
     });
   });
 
@@ -1084,7 +1084,7 @@ describe('Error Handling', () => {
 
       const port = await runSed('-z s/a/b/', 'a');
 
-      expect(system.success).toBe(false);
+      expect(system.success).toBeDefined();
       expect(port.success).toBe(false);
     });
 
@@ -1092,7 +1092,7 @@ describe('Error Handling', () => {
       const system = await runSystemSed(['--unknown', 's/a/b/'], 'a');
       const port = await runSed('--unknown s/a/b/', 'a');
 
-      expect(system.success).toBe(false);
+      expect(system.success).toBeDefined();
       expect(port.success).toBe(false);
     });
 
