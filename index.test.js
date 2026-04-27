@@ -917,8 +917,20 @@ describe('Advanced Commands (Additional Coverage)', () => {
     });
   });
 
+ 
 describe('-f (script file)', () => {
+  let tmpDir;
+
+  beforeAll(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sed-test-'));
+  });
+
+  afterAll(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
   it('executes script from file', async () => {
+    myVfs['script.sed'] = 's/hello/HELLO/\ns/world/WORLD/\n';
     const realPath = path.join(tmpDir, 'script.sed');
     await fs.writeFile(realPath, myVfs['script.sed']);
 
@@ -930,6 +942,7 @@ describe('-f (script file)', () => {
   });
 
   it('ignores comments in script file', async () => {
+    myVfs['script-comments.sed'] = '# comment\ns/hello/HELLO/\n';
     const realPath = path.join(tmpDir, 'script-comments.sed');
     await fs.writeFile(realPath, myVfs['script-comments.sed']);
 
@@ -942,7 +955,6 @@ describe('-f (script file)', () => {
 
   it('combines -f and -e', async () => {
     myVfs['script-mixed.sed'] = 's/hello/HELLO/\n';
-
     const realPath = path.join(tmpDir, 'script-mixed.sed');
     await fs.writeFile(realPath, myVfs['script-mixed.sed']);
 
@@ -962,10 +974,8 @@ describe('-f (script file)', () => {
 
     expect(port.success).toBe(false);
     expect(system.success).toBe(false);
-
-    // loosen this: implementations differ here
     expect(port.error.toLowerCase()).toContain('nope');
     expect(system.error.toLowerCase()).toContain('nope');
   });
- });
+  });
 });
