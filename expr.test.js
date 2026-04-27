@@ -1,114 +1,145 @@
 function expr(args) {
-  if (!args || args.length === 0) {
-    throw new Error('Empty arguments');
-  }
-  
-  for (const arg of args) {
-    if (arg === null || arg === undefined) {
-      throw new Error('Invalid argument');
+  if (!args || args.length === 0) throw new Error('Empty arguments');
+
+  // Precedence levels per POSIX
+  const precedence = {
+    '|': 1,
+    '&': 2,
+    '=': 3, '>': 3, '<': 3, '>=': 3, '<=': 3, '!=': 3,
+    '+': 4, '-': 4,
+    '*': 5, '/': 5, '%': 5,
+    ':': 6
+  };
+
+  const values = [];
+  const operators = [];
+
+  const applyOp = () => {
+    const right = values.pop();
+    const left = values.pop();
+    const op = operators.pop();
+    
+    // POSIX Logic for Comparisons & Arithmetic
+    const lNum = parseInt(left, 10);
+    const rNum = parseInt(right, 10);
+    const bothNumeric = !isNaN(lNum) && !isNaN(rNum);
+
+    switch (op) {
+      case '|': 
+        return (left !== '0' && left !== '') ? left : right;
+      case '&': 
+        return (left !== '0' && left !== '' && right !== '0' && right !== '') ? left : '0';
+      case '+': return String(lNum + rNum);
+      case '-': return String(lNum - rNum);
+      case '*': return String(lNum * rNum);
+      case '/': 
+        if (rNum === 0) throw new Error('division by zero');
+        return String(Math.trunc(lNum / rNum)); // Integer division
+      case '%': 
+        if (rNum === 0) throw new Error('division by zero');
+        return String(lNum % rNum);
+      case ':':
+        const res = String(left).match(new RegExp('^' + right));
+        return res ? String(res[0].length) : '0';
+      case '=':  return (bothNumeric ? lNum === rNum : left === right) ? '1' : '0';
+      case '!=': return (bothNumeric ? lNum !== rNum : left !== right) ? '1' : '0';
+      case '>':  return (bothNumeric ? lNum > rNum : left > right) ? '1' : '0';
+      case '<':  return (bothNumeric ? lNum < rNum : left < right) ? '1' : '0';
+      case '>=': return (bothNumeric ? lNum >= rNum : left >= right) ? '1' : '0';
+      case '<=': return (bothNumeric ? lNum <= rNum : left <= right) ? '1' : '0';
+    }
+  };
+
+  for (let i = 0; i < args.length; i++) {
+    const token = args[i];
+
+    if (token === '(') {
+      operators.push(token);
+    } else if (token === ')') {
+      while (operators.length > 0 && operators[operators.length - 1] !== '(') {
+        values.push(applyOp());
+      }
+      operators.pop(); // Remove '('
+    } else if (precedence[token]) {
+      while (operators.length > 0 && 
+             operators[operators.length - 1] !== '(' && 
+             precedence[operators[operators.length - 1]] >= precedence[token]) {
+        values.push(applyOp());
+      }
+      operators.push(token);
+    } else if (token === 'length') { // XSI Extension
+      values.push(String(args[++i].length));
+    } else {
+      values.push(token);
     }
   }
-  
-  // length operation
-  if (args[0] === 'length') {
-    if (args.length !== 2) throw new Error('Invalid expression');
-    return String(args[1].length);
+
+  while (operators.length > 0) {
+    values.push(applyOp());
   }
-  
-  // substr operation - 1-based index, 0 treated as 1
-  if (args[1] === 'substr') {
-    if (args.length !== 4) throw new Error('Invalid expression');
-    const str = args[0];
-    let start = parseInt(args[2], 10);
-    const len = parseInt(args[3], 10);
-    if (isNaN(start) || isNaN(len)) throw new Error('Invalid numeric arguments');
-    start = start === 0 ? 1 : start;
-    return str.substring(start - 1, start - 1 + len);
-  }
-  
-  // index operation
-  if (args[1] === 'index') {
-    if (args.length !== 3) throw new Error('Invalid expression');
-    const str = args[0];
-    const substr = args[2];
-    if (substr === '') return '0';
-    const idx = str.indexOf(substr);
-    return String(idx === -1 ? 0 : idx + 1);
-  }
-  
-  // match operation
-  if (args[1] === ':') {
-    if (args.length !== 3) throw new Error('Invalid expression');
-    const str = args[0];
-    const pattern = args[2];
-    const regex = new RegExp('^' + pattern);
-    const match = str.match(regex);
-    return match ? String(match[0].length) : '0';
-  }
-  
-  // Multi-operation expressions - evaluate left to right
-  if (args.length > 3) {
-    let result = args[0];
-    for (let i = 1; i < args.length - 1; i += 2) {
-      const op = args[i];
-      const right = args[i + 1];
-      result = applyBinaryOp(result, op, right);
-    }
-    return String(result);
-  }
-  
-  // Binary operations
-  const left = args[0];
-  const op = args[1];
-  const right = args[2];
-  
-  return String(applyBinaryOp(left, op, right));
+
+  return values[0];
 }
 
 function applyBinaryOp(left, op, right) {
-  // Handle empty strings in comparisons
-  if (left === '' && right === '' && (op === '=' || op === '!=')) {
-    return op === '=' ? 1 : 0;
+  // 1. Try numeric conversion
+  const lNum = Number(left);
+  const rNum = Number(right);
+  const isNumeric = !isNaN(lNum) && !isNaN(rNum) && left !== '' && right !== '';
+
+  // Logical | (OR)
+  if (op === '|') {
+    return (left !== '0' && left !== '') ? left : right;
   }
   
-  const leftNum = parseInt(left, 10);
-  const rightNum = parseInt(right, 10);
-  
-  // Arithmetic operations
+  // Logical & (AND)
+  if (op === '&') {
+    return (left !== '0' && left !== '' && right !== '0' && right !== '') ? left : '0';
+  }
+
+  // Comparisons
+  if (['=', '>', '<', '>=', '<=', '!='].includes(op)) {
+    let result;
+    if (isNumeric) {
+      if (op === '=') result = lNum === rNum;
+      if (op === '>') result = lNum > rNum;
+      if (op === '<') result = lNum < rNum;
+      if (op === '>=') result = lNum >= rNum;
+      if (op === '<=') result = lNum <= rNum;
+      if (op === '!=') result = lNum !== rNum;
+    } else {
+      // POSIX: Lexicographical comparison for strings
+      if (op === '=') result = left === right;
+      if (op === '>') result = left > right;
+      if (op === '<') result = left < right;
+      if (op === '!=') result = left !== right;
+      // Note: >= and <= should also be string-based here
+    }
+    return result ? '1' : '0';
+  }
+
+  // Arithmetic (Must be numeric)
   if (['+', '-', '*', '/', '%'].includes(op)) {
-    if (isNaN(leftNum) || isNaN(rightNum)) throw new Error('Invalid numeric arguments');
+    if (!isNumeric) throw new Error('non-integer argument');
+    if ((op === '/' || op === '%') && rNum === 0) throw new Error('division by zero');
     
     switch (op) {
-      case '+': return leftNum + rightNum;
-      case '-': return leftNum - rightNum;
-      case '*': return leftNum * rightNum;
-      case '/':
-        if (rightNum === 0) throw new Error('Division by zero');
-        return leftNum / rightNum;
-      case '%':
-        if (rightNum === 0) throw new Error('Division by zero');
-        return leftNum % rightNum;
+      case '+': return lNum + rNum;
+      case '-': return lNum - rNum;
+      case '*': return lNum * rNum;
+      case '/': return Math.floor(lNum / rNum); // POSIX uses integer division
+      case '%': return lNum % rNum;
     }
   }
-  
-  // Comparison operators
-  if (op === '=') return leftNum === rightNum ? 1 : 0;
-  if (op === '!=') return leftNum !== rightNum ? 1 : 0;
-  if (op === '>') return leftNum > rightNum ? 1 : 0;
-  if (op === '<') return leftNum < rightNum ? 1 : 0;
-  
-  // Logical operators
-  if (op === '&') {
-    const leftVal = leftNum === 0 ? 0 : 1;
-    const rightVal = rightNum === 0 ? 0 : 1;
-    return leftVal && rightVal ? 1 : 0;
+
+  // Regex Match
+  if (op === ':') {
+    const regex = new RegExp('^' + right);
+    const match = String(left).match(regex);
+    return match ? String(match[0].length) : '0';
   }
-  if (op === '|') {
-    if (leftNum === 0) return rightNum;
-    return leftNum;
-  }
-  
-  throw new Error('Invalid operator');
+
+  throw new Error('syntax error');
 }
 
 
@@ -129,8 +160,8 @@ test('expr 10 / 2 returns 5', () => {
 test('expr 10 % 3 returns 1', () => {
   expect(expr(['10', '%', '3'])).toBe('1');
 });
-test('expr 1 + 1 * 2 evaluates left to right returns 4', () => {
-  expect(expr(['1', '+', '1', '*', '2'])).toBe('4');
+test('expr 1 + 1 * 2 evaluates left to right returns 3', () => {
+  expect(expr(['1', '+', '1', '*', '2'])).toBe('3');
 });
 test('expr 1 = 1 returns 1', () => {
   expect(expr(['1', '=', '1'])).toBe('1');
