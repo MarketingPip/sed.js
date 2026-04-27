@@ -826,7 +826,6 @@ async function processContent(content, commands, silent, options = {}) {
   const { filename, vfs, shell } = options;
   const lines = content.split("\n");
   const endsWithNewline = content.endsWith("\n");
-  const lines = content.split("\n");
   if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
 
   const totalLines = lines.length; let output = ""; let exitCode;
