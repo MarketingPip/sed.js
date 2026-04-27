@@ -893,25 +893,57 @@ async function processContent(content, commands, silent, options = {}) {
 // 6. Public API / CLI Arg Parser
 // ==========================================
 
-
 function parseShellString(str) {
-  const args =[]; let current = ''; let inQuotes = false; let quoteChar = null; let escape = false;
+  const args = [];
+  let current = '';
+  let inQuotes = false;
+  let quoteChar = null;
+  let escape = false;
+
   for (let i = 0; i < str.length; i++) {
     const char = str[i];
     if (escape) { current += char; escape = false; continue; }
     if (char === '\\') { escape = true; current += char; continue; }
     if (inQuotes) {
-      if (char === quoteChar) inQuotes = false;
+      if (char === quoteChar) { inQuotes = false; quoteChar = null; }
       else current += char;
     } else {
       if (char === "'" || char === '"') { inQuotes = true; quoteChar = char; }
-      else if (char === ' ' || char === '\t') { if (current.length > 0) { args.push(current); current = ''; } }
-      else { current += char; }
+      else if (char === ' ' || char === '\t') {
+        if (current.length > 0) { args.push(current); current = ''; }
+      } else { current += char; }
     }
   }
   if (current.length > 0) args.push(current);
+
+  // Improved Regex: 
+  // 1. Ensure it's a standalone command or follows an address.
+  // 2. Added '$' to ensure it's at the end of the token.
+  const textCmdRe = /(?:^|[^\\a-zA-Z])(?:\d+|\/[^/]*\/)?[aic]$/;
+
+  for (let i = 0; i < args.length - 1; i++) {
+    if (textCmdRe.test(args[i])) {
+      // Check if the NEXT token is an option (like -e or -n). 
+      // If it is, this 'a/i/c' might be a false positive or empty.
+      if (args[i+1].startsWith('-')) continue;
+
+      // Only join the IMMEDIATE next token if we are trying to 
+      // stay compatible with simple shell splits, OR join until the next flag.
+      let j = i + 1;
+      while (j < args.length && !args[j].startsWith('-')) {
+        j++;
+      }
+      
+      // Join only the non-flag arguments following the command
+      const count = j - i;
+      const joined = args.splice(i, count).join(' ');
+      args.splice(i, 0, joined);
+    }
+  }
+
   return args;
 }
+ 
 
 function parseShellString2(str) {
   const args = [];
