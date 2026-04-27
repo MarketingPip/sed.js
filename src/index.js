@@ -893,10 +893,9 @@ async function processContent(content, commands, silent, options = {}) {
 // 6. Public API / CLI Arg Parser
 // ==========================================
 
-function parseShellString(str) {
+function parseShellString(input) {
   if (!input || input.trim() === '') return [];
   
-  // Phase 1: Shell-style tokenization
   const tokens = [];
   let i = 0;
   let currentToken = '';
@@ -954,21 +953,23 @@ function parseShellString(str) {
   
   if (tokens.length === 0) return [];
   
-  // Phase 2: Sed-specific joining
-  // Matches text commands (a, i, c) but not s/.../.../flags
-  // Must end with a/i/c as a standalone command character, not preceded by /
-  const TEXT_COMMAND_REGEX = /^(?:\d+(?:,\d+)?|\/[^\/]*\/)([a-i])$|^[a-i]$/i;
-  
   const result = [];
   let pendingJoin = '';
-  let joinNext = false;
-  let afterEF = false;
+  let shouldJoin = false;
   
-  for (let token of tokens) {
-    const isFlag = token.startsWith('-');
-    
-    if (isFlag) {
-      // End any pending join when we hit a flag
+  function isTextCommand(token) {
+    const bare = /^[a-c]$/i.test(token);
+    const numAddr = /^\d+([,]\d+)?[a-c]$/i.test(token);
+    const patAddr = /^\/[^/]*\/[a-c]$/i.test(token);
+    return bare || numAddr || patAddr;
+  }
+  
+  function isFlag(token) {
+    return token.startsWith('-');
+  }
+  
+  for (const token of tokens) {
+    if (isFlag(token)) {
       if (pendingJoin) {
         if (result.length > 0) {
           result[result.length - 1] += ' ' + pendingJoin;
@@ -979,55 +980,29 @@ function parseShellString(str) {
       }
       
       if (token === '-e' || token === '-f') {
-        afterEF = true;
         result.push(token);
         continue;
       }
       
-      afterEF = false;
       result.push(token);
-      joinNext = false;
+      shouldJoin = false;
       continue;
     }
     
-    // Check if this is a text command token
-    const isTextCommand = /^(?:[0-9]+,[0-9]+|\/[^\/]*\/)[aic]$/i.test(token) || /^[aic]$/i.test(token);
+    const textCmd = isTextCommand(token);
     
-    if (afterEF) {
-      // For -e/-f, we need to handle joining specially
-      if (isTextCommand && pendingJoin) {
-        pendingJoin += ' ' + token;
-      } else {
-        if (pendingJoin) {
-          result.push(pendingJoin);
-        } else {
-          result.push(token);
-          joinNext = isTextCommand;
-        }
-        pendingJoin = '';
-        afterEF = false;
-      }
+    if (textCmd && !pendingJoin) {
+      pendingJoin = token;
+      shouldJoin = true;
       continue;
     }
     
-    if (joinNext) {
+    if (shouldJoin) {
       pendingJoin += ' ' + token;
-      joinNext = isTextCommand;
+      shouldJoin = isTextCommand(token);
       continue;
     }
     
-    if (isTextCommand) {
-      if (result.length === 0 || result[result.length - 1].startsWith('-')) {
-        pendingJoin = token;
-        joinNext = true;
-      } else {
-        result[result.length - 1] += ' ' + token;
-        joinNext = true;
-      }
-      continue;
-    }
-    
-    // Regular token
     if (pendingJoin) {
       if (result.length > 0) {
         result[result.length - 1] += ' ' + pendingJoin;
@@ -1038,10 +1013,8 @@ function parseShellString(str) {
     }
     
     result.push(token);
-    joinNext = false;
   }
   
-  // Handle any remaining pending join
   if (pendingJoin) {
     if (result.length > 0) {
       result[result.length - 1] += ' ' + pendingJoin;
