@@ -26,6 +26,6 @@
   },
   "dependencies": {
     "lucide": "^0.473.0",
-    "shellwords": "@^1.0.1"
+    "shellwords": "^1.0.1"
   }
 }
