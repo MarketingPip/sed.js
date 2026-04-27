@@ -61,7 +61,7 @@ world foo hello`
 
         runBtn.addEventListener('click', async () => {
             try {
-                const command = commandArea.value;
+                const command = commandArea.value.split(" ");
               
               const targetPath = command[command.length - 1];
               
