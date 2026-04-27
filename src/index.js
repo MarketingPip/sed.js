@@ -1069,13 +1069,26 @@ export default async function sed(commandStr, options = {}) {
     else if (arg === "-i" || arg === "--in-place" || arg.startsWith("-i")) inPlace = true;
     else if (["-E", "-r", "--regexp-extended"].includes(arg)) extendedRegex = true;
     else if (arg === "-e") { if (i + 1 < args.length) scripts.push(args[++i]); }
+    else if (arg === "-f") {
+      if (i + 1 < args.length) {
+        const scriptFile = args[++i];
+        if (!(scriptFile in vfs)) throw new Error(`sed: ${scriptFile}: No such file or directory`);
+        scripts.push(vfs[scriptFile]);
+      }
+    }
     else if (arg.startsWith("--")) throw new Error(`sed: unknown option ${arg}`);
     else if (arg === "-") files.push(arg);
     else if (arg.startsWith("-") && arg.length > 1) {
       if (arg.includes("n")) silent = true;
       if (arg.includes("i")) inPlace = true;
       if (arg.includes("E") || arg.includes("r")) extendedRegex = true;
-      if (arg.includes("e") && !arg.includes("n") && !arg.includes("i") && i + 1 < args.length) scripts.push(args[++i]);
+      if (arg.includes("f") && i + 1 < args.length) {
+        const scriptFile = args[++i];
+        if (!(scriptFile in vfs)) throw new Error(`sed: ${scriptFile}: No such file or directory`);
+        scripts.push(vfs[scriptFile]);
+      } else if (arg.includes("e") && !arg.includes("n") && !arg.includes("i") && i + 1 < args.length) {
+        scripts.push(args[++i]);
+      }
     } else {
       if (inPlace || options.stdin === undefined || options.stdin === null) {
         if (scripts.length === 0 && implicitScript.length === 0) implicitScript.push(arg);
