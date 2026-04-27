@@ -46,7 +46,6 @@ async function runSed(command, stdin = null, shell = fakeShell) {
 
     return { success: true, data: normalizeEol(result), error: null };
   } catch (err) {
-    console.error('[runSed error]', err?.message ?? String(err));
     return {
       success: false,
       data: null,
