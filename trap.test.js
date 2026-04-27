@@ -89,8 +89,7 @@ function trap(signal, command) {
   if (signal === undefined || signal === null) {
     throw new Error('Signal must be a string or number');
   }
-  
-  let signalNum;
+
   const nameToNum = {
     'EXIT': 0, '0': 0,
     'HUP': 1, 'SIGHUP': 1, '1': 1,
@@ -125,47 +124,44 @@ function trap(signal, command) {
     'PWR': 30, 'SIGPWR': 30, '30': 30,
     'SYS': 31, 'SIGSYS': 31, '31': 31,
   };
-  
+
+  let signalNum;
+
   if (typeof signal === 'string') {
     const signalName = signal.toUpperCase();
-    if (nameToNum[signalName] !== undefined) {
-      signalNum = nameToNum[signalName];
-    } else {
-      // If it's a string like "34", convert it
-      const parsed = parseInt(signal, 10);
-      if (isNaN(parsed)) throw new Error('Invalid signal name');
-      signalNum = parsed;
+    if (nameToNum[signalName] === undefined) {
+      throw new Error('Invalid signal name');
     }
+    signalNum = nameToNum[signalName];
   } else if (typeof signal === 'number') {
-    // Relaxed validation: just ensure it's a non-negative integer
-    if (signal < 0 || !Number.isInteger(signal)) {
+    // Check if the number is one of the valid POSIX signal numbers (0-31)
+    if (!Object.values(nameToNum).includes(signal)) {
       throw new Error('Invalid signal number');
     }
     signalNum = signal;
   } else {
     throw new Error('Signal must be a string or number');
   }
-  
-  // FIX 1: Test 242 expects null when command is undefined, 
-  // even if a handler already exists.
+
+  // Ensure returns null when command is undefined (Test 242)
   if (command === undefined) {
     return null;
   }
-  
+
   if (command === '') {
     handlers.delete(signalNum);
     return null;
   }
-  
+
   if (typeof command !== 'string') {
     throw new Error('Command must be a string');
   }
-  
-  const existing = handlers.get(signalNum);
-  if (existing !== undefined) {
-    return existing; 
+
+  // Handle multiple registrations (Return first registered command)
+  if (handlers.has(signalNum)) {
+    return handlers.get(signalNum);
   }
-  
+
   handlers.set(signalNum, command);
   return command;
 }
