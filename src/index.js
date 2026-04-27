@@ -882,7 +882,7 @@ async function processContent(content, commands, silent, options = {}) {
 
   if (vfs) { for (const[filePath, fileContent] of fileWrites) vfs[filePath] = fileContent; }
   
-  //if (output.endsWith("\n")) output = output.slice(0, -1);
+  if (output.endsWith("\n")) output = output.slice(0, -1);
   return { output, exitCode };
 }
 
