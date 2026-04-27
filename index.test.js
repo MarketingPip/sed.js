@@ -11,7 +11,7 @@ let emptyPath;
 let numbersPath;
 
 const myVfs = {
-  'notes.txt': 'Hello, this is a test file containing the word hello.',
+  'notes.txt': 'Hello, this is a test file containing the word hello.', 
   'multi.txt': 'one\ntwo\nthree\nfour\nfive',
   'empty.txt': '',
   'numbers.txt': '1\n2\n3\n4\n5\n6\n7\n8\n9\n10',
