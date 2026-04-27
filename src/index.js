@@ -900,6 +900,7 @@ function parseShellString(str) {
   let quoteChar = null;
   let escape = false;
 
+  // 1. Standard Shell Split
   for (let i = 0; i < str.length; i++) {
     const char = str[i];
     if (escape) { current += char; escape = false; continue; }
@@ -916,28 +917,36 @@ function parseShellString(str) {
   }
   if (current.length > 0) args.push(current);
 
-  // Improved Regex: 
-  // 1. Ensure it's a standalone command or follows an address.
-  // 2. Added '$' to ensure it's at the end of the token.
-  const textCmdRe = /(?:^|[^\\a-zA-Z])(?:\d+|\/[^/]*\/)?[aic]$/;
+  // 2. Controlled Re-joining for a/i/c
+  // This regex matches: 
+  // - Start of string OR a non-word char (like ;) 
+  // - Followed by an optional address (digits or /.../)
+  // - Ending in exactly a, i, or c.
+  const textCmdRe = /(?:^|[^a-zA-Z0-9\\])(?:\d+|\/[^/]*\/)?[aic]$/;
 
   for (let i = 0; i < args.length - 1; i++) {
-    if (textCmdRe.test(args[i])) {
-      // Check if the NEXT token is an option (like -e or -n). 
-      // If it is, this 'a/i/c' might be a false positive or empty.
-      if (args[i+1].startsWith('-')) continue;
+    const token = args[i];
 
-      // Only join the IMMEDIATE next token if we are trying to 
-      // stay compatible with simple shell splits, OR join until the next flag.
-      let j = i + 1;
-      while (j < args.length && !args[j].startsWith('-')) {
-        j++;
+    // SKIP if it's a CLI flag like -i, --in-place, -a, etc.
+    if (token.startsWith('-')) continue;
+
+    if (textCmdRe.test(token)) {
+      // Only join the VERY NEXT token if it's not a flag and not a file
+      // In sed, text commands typically consume the rest of the current script argument.
+      // If the next arg is a file (notes.txt), we shouldn't eat it unless it was quoted.
+      
+      // Lookahead: If the next token looks like a file or another flag, don't join.
+      // This is the "safe" middle ground.
+      const nextToken = args[i + 1];
+      if (!nextToken.startsWith('-') && i + 1 === args.length - 1) {
+        // If it's the last token, it's likely the filename, don't join!
+        break; 
       }
       
-      // Join only the non-flag arguments following the command
-      const count = j - i;
-      const joined = args.splice(i, count).join(' ');
-      args.splice(i, 0, joined);
+      if (!nextToken.startsWith('-')) {
+        const joined = args.splice(i, 2).join(' ');
+        args.splice(i, 0, joined);
+      }
     }
   }
 
