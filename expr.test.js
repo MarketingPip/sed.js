@@ -178,8 +178,8 @@ test('expr 5 > 3 returns 1', () => {
 test('expr 2 < 3 returns 1', () => {
   expect(expr(['2', '<', '3'])).toBe('1');
 });
-test('expr 5 & 2 returns 1', () => {
-  expect(expr(['5', '&', '2'])).toBe('1');
+test('expr 5 & 2 returns 5', () => {
+  expect(expr(['5', '&', '2'])).toBe('5');
 });
 test('expr 0 & 2 returns 0', () => {
   expect(expr(['0', '&', '2'])).toBe('0');
