@@ -54,6 +54,17 @@ function getGroupName(gid) {
   return process.env.USER || "runner"
 }
 
+
+/**
+ * Get deterministic owner/group (test-safe)
+ */
+function getOwner() {
+  return {
+    user: process.env.USER || "runner",
+    group: process.env.USER || "runner",
+  }
+}
+
 function safeStat(full) {
   try {
     return fs.statSync(full)
