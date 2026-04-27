@@ -6,7 +6,7 @@ import sed from "../../src/index.js";
 
 function stdinActive(){
   const checkbox = document.getElementById('enableStdin');
-  return checkbox.checked;
+  return checkbox.checked === true;
 }
 
         // Playground State
@@ -81,7 +81,7 @@ world foo hello`
               }
                
               let result;
-              if(!stdinActive){
+              if(stdinActive() === false){
                 result = await sed(command, { vfs: myVfs, shell:hello});
               }else{
                 result = await sed(command, { stdin: _stdin, shell:hello});
