@@ -890,20 +890,43 @@ async function processContent(content, commands, silent, options = {}) {
 // 6. Public API / CLI Arg Parser
 // ==========================================
 
+
 function parseShellString(str) {
-  const args =[]; let current = ''; let inQuotes = false; let quoteChar = null; let escape = false;
+  const args = [];
+  let current = '';
+  let inQuotes = false;
+  let quoteChar = null;
+  let escape = false;
+
   for (let i = 0; i < str.length; i++) {
     const char = str[i];
     if (escape) { current += char; escape = false; continue; }
     if (char === '\\') { escape = true; current += char; continue; }
-    if (inQuotes) { if (char === quoteChar) inQuotes = false; else current += char; }
-    else {
+    if (inQuotes) {
+      if (char === quoteChar) inQuotes = false;
+      else current += char;
+    } else {
       if (char === "'" || char === '"') { inQuotes = true; quoteChar = char; }
-      else if (char === ' ' || char === '\t') { if (current.length > 0) { args.push(current); current = ''; } }
-      else { current += char; }
+      else if (char === ' ' || char === '\t') {
+        if (current.length > 0) { args.push(current); current = ''; }
+      } else { current += char; }
     }
   }
   if (current.length > 0) args.push(current);
+
+  // Re-join any token that ends with a bare a/i/c command (with optional
+  // address prefix) with all subsequent tokens, because a/i/c consume the
+  // rest of the line as their text argument and must not be word-split.
+  // e.g. ['/two/a', 'AFTER'] → ['/two/a AFTER']
+  const textCmdRe = /(?:^|[^\\])(?:\d+|\/[^/]*\/)?[aic]$/;
+  for (let i = 0; i < args.length - 1; i++) {
+    if (textCmdRe.test(args[i])) {
+      const joined = args.splice(i, args.length - i).join(' ');
+      args.push(joined);
+      break;
+    }
+  }
+
   return args;
 }
 
