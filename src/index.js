@@ -895,6 +895,25 @@ async function processContent(content, commands, silent, options = {}) {
 
 
 function parseShellString(str) {
+  const args =[]; let current = ''; let inQuotes = false; let quoteChar = null; let escape = false;
+  for (let i = 0; i < str.length; i++) {
+    const char = str[i];
+    if (escape) { current += char; escape = false; continue; }
+    if (char === '\\') { escape = true; current += char; continue; }
+    if (inQuotes) {
+      if (char === quoteChar) inQuotes = false;
+      else current += char;
+    } else {
+      if (char === "'" || char === '"') { inQuotes = true; quoteChar = char; }
+      else if (char === ' ' || char === '\t') { if (current.length > 0) { args.push(current); current = ''; } }
+      else { current += char; }
+    }
+  }
+  if (current.length > 0) args.push(current);
+  return args;
+}
+
+function parseShellString2(str) {
   const args = [];
   let current = '';
   let inQuotes = false;
