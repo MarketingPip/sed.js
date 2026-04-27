@@ -2,7 +2,6 @@ import "../css/styles.css";
 import '../pages/playground.html';
 
 import sed from "../../src/index.js";
-import {split as splitShell} from "shellwords";
 
 function stdinActive(){
   const checkbox = document.getElementById('enableStdin');
@@ -61,7 +60,7 @@ world foo hello`
 
         runBtn.addEventListener('click', async () => {
             try {
-                const command = splitShell(commandArea.value);
+                const command = commandArea.value;
               
               const targetPath = command[command.length - 1];
               
