@@ -894,73 +894,162 @@ async function processContent(content, commands, silent, options = {}) {
 // ==========================================
 
 function parseShellString(str) {
-  const args = [];
-  let current = '';
-  let inQuotes = false;
-  let quoteChar = null;
-  let escape = false;
-
-  // 1. Initial split (handling quotes and escapes)
-  for (let i = 0; i < str.length; i++) {
-    const char = str[i];
-    if (escape) { current += char; escape = false; continue; }
-    if (char === '\\') { escape = true; current += char; continue; }
-    if (inQuotes) {
-      if (char === quoteChar) { inQuotes = false; quoteChar = null; }
-      else current += char;
-    } else {
-      if (char === "'" || char === '"') { inQuotes = true; quoteChar = char; }
-      else if (char === ' ' || char === '\t') {
-        if (current.length > 0) { args.push(current); current = ''; }
-      } else { current += char; }
-    }
-  }
-  if (current.length > 0) args.push(current);
-
-  // 2. Context-aware re-joining
-  const result = [];
-  const textCmdRe = /(?:^|[^a-zA-Z0-9\\])(?:\d+|\/[^/]*\/)?[aic]$/;
+  if (!input || input.trim() === '') return [];
   
-  let expectExpression = false;
-  let expressionFound = false;
-
-  for (let i = 0; i < args.length; i++) {
-    const token = args[i];
-
-    // If this token is a script (either after -e or the first positional script)
-    const isScript = expectExpression || (!token.startsWith('-') && !expressionFound && i > 0);
-
-    if (isScript && textCmdRe.test(token)) {
-      // It's an a/i/c command. Look ahead to see if there is text to join.
-      // We stop joining if we hit the end or the next token is a flag.
-      let j = i + 1;
-      while (j < args.length && !args[j].startsWith('-')) {
-        j++;
-      }
-      
-      // Merge the command and all subsequent non-flag tokens into one script string
-      const joined = args.slice(i, j).join(' ');
-      result.push(joined);
-      
-      // Advance the loop index and update state
-      i = j - 1;
-      expressionFound = true;
-      expectExpression = false;
-    } else {
-      result.push(token);
-      
-      // Update state for next iteration
-      if (token === '-e') {
-        expectExpression = true;
-      } else if (!token.startsWith('-') && i > 0) {
-        expressionFound = true; // Mark that the main script has been found
-        expectExpression = false;
+  // Phase 1: Shell-style tokenization
+  const tokens = [];
+  let i = 0;
+  let currentToken = '';
+  let inQuote = null;
+  let inEscape = false;
+  
+  while (i < input.length) {
+    const char = input[i];
+    
+    if (inEscape) {
+      currentToken += char;
+      inEscape = false;
+      i++;
+      continue;
+    }
+    
+    if (char === '\\' && inQuote) {
+      inEscape = true;
+      i++;
+      continue;
+    }
+    
+    if ((char === '"' || char === "'") && !inEscape) {
+      if (!inQuote) {
+        if (currentToken) {
+          tokens.push(currentToken);
+          currentToken = '';
+        }
+        inQuote = char;
+      } else if (inQuote === char) {
+        inQuote = null;
       } else {
-        expectExpression = false;
+        currentToken += char;
       }
+      i++;
+      continue;
+    }
+    
+    if (!inQuote && char === ' ') {
+      if (currentToken) {
+        tokens.push(currentToken);
+        currentToken = '';
+      }
+      i++;
+      continue;
+    }
+    
+    currentToken += char;
+    i++;
+  }
+  
+  if (currentToken) {
+    tokens.push(currentToken);
+  }
+  
+  if (tokens.length === 0) return [];
+  
+  // Phase 2: Sed-specific joining
+  // Matches text commands (a, i, c) but not s/.../.../flags
+  // Must end with a/i/c as a standalone command character, not preceded by /
+  const TEXT_COMMAND_REGEX = /^(?:\d+(?:,\d+)?|\/[^\/]*\/)([a-i])$|^[a-i]$/i;
+  
+  const result = [];
+  let pendingJoin = '';
+  let joinNext = false;
+  let afterEF = false;
+  
+  for (let token of tokens) {
+    const isFlag = token.startsWith('-');
+    
+    if (isFlag) {
+      // End any pending join when we hit a flag
+      if (pendingJoin) {
+        if (result.length > 0) {
+          result[result.length - 1] += ' ' + pendingJoin;
+        } else {
+          result.push(pendingJoin);
+        }
+        pendingJoin = '';
+      }
+      
+      if (token === '-e' || token === '-f') {
+        afterEF = true;
+        result.push(token);
+        continue;
+      }
+      
+      afterEF = false;
+      result.push(token);
+      joinNext = false;
+      continue;
+    }
+    
+    // Check if this is a text command token
+    const isTextCommand = /^(?:[0-9]+,[0-9]+|\/[^\/]*\/)[aic]$/i.test(token) || /^[aic]$/i.test(token);
+    
+    if (afterEF) {
+      // For -e/-f, we need to handle joining specially
+      if (isTextCommand && pendingJoin) {
+        pendingJoin += ' ' + token;
+      } else {
+        if (pendingJoin) {
+          result.push(pendingJoin);
+        } else {
+          result.push(token);
+          joinNext = isTextCommand;
+        }
+        pendingJoin = '';
+        afterEF = false;
+      }
+      continue;
+    }
+    
+    if (joinNext) {
+      pendingJoin += ' ' + token;
+      joinNext = isTextCommand;
+      continue;
+    }
+    
+    if (isTextCommand) {
+      if (result.length === 0 || result[result.length - 1].startsWith('-')) {
+        pendingJoin = token;
+        joinNext = true;
+      } else {
+        result[result.length - 1] += ' ' + token;
+        joinNext = true;
+      }
+      continue;
+    }
+    
+    // Regular token
+    if (pendingJoin) {
+      if (result.length > 0) {
+        result[result.length - 1] += ' ' + pendingJoin;
+      } else {
+        result.push(pendingJoin);
+      }
+      pendingJoin = '';
+    }
+    
+    result.push(token);
+    joinNext = false;
+  }
+  
+  // Handle any remaining pending join
+  if (pendingJoin) {
+    if (result.length > 0) {
+      result[result.length - 1] += ' ' + pendingJoin;
+    } else {
+      result.push(pendingJoin);
     }
   }
-
+  
   return result;
 }
  
