@@ -22,8 +22,8 @@ async function fakeShell(cmd) {
   return 'unknown command';
 }
 
-function normalizeEol(value) {
-  return String(value ?? '').replace(/\r\n/g, '\n');
+ function normalizeEol(value) {
+    return String(value ?? '').replace(/\r\n/g, '\n').replace(/\n$/, '');
 }
 
 function escapeRegex(value) {
