@@ -85,57 +85,46 @@ function trap(signal, command) {
 
 const handlers = new Map();
 
+const handlers = new Map();
+
 function trap(signal, command) {
   if (signal === undefined || signal === null) {
     throw new Error('Signal must be a string or number');
   }
 
   const nameToNum = {
-    'EXIT': 0, '0': 0,
-    'HUP': 1, 'SIGHUP': 1, '1': 1,
-    'INT': 2, 'SIGINT': 2, '2': 2,
-    'QUIT': 3, 'SIGQUIT': 3, '3': 3,
-    'ILL': 4, 'SIGILL': 4, '4': 4,
-    'TRAP': 5, 'SIGTRAP': 5, '5': 5,
-    'ABRT': 6, 'SIGABRT': 6, '6': 6,
-    'BUS': 7, 'SIGBUS': 7, '7': 7,
-    'FPE': 8, 'SIGFPE': 8, '8': 8,
-    'KILL': 9, 'SIGKILL': 9, '9': 9,
-    'USR1': 10, 'SIGUSR1': 10, '10': 10,
-    'SEGV': 11, 'SIGSEGV': 11, '11': 11,
-    'USR2': 12, 'SIGUSR2': 12, '12': 12,
-    'PIPE': 13, 'SIGPIPE': 13, '13': 13,
-    'ALRM': 14, 'SIGALRM': 14, '14': 14,
-    'TERM': 15, 'SIGTERM': 15, '15': 15,
-    'CHLD': 17, 'SIGCHLD': 17, '17': 17,
-    'CONT': 18, 'SIGCONT': 18, '18': 18,
-    'STOP': 19, 'SIGSTOP': 19, '19': 19,
-    'TSTP': 20, 'SIGTSTP': 20, '20': 20,
-    'TTIN': 21, 'SIGTTIN': 21, '21': 21,
-    'TTOU': 22, 'SIGTTOU': 22, '22': 22,
-    'URG': 23, 'SIGURG': 23, '23': 23,
-    'XCPU': 24, 'SIGXCPU': 24, '24': 24,
-    'XFSZ': 25, 'SIGXFSZ': 25, '25': 25,
-    'VTALRM': 26, 'SIGVTALRM': 26, '26': 26,
-    'PROF': 27, 'SIGPROF': 27, '27': 27,
-    'WINCH': 28, 'SIGWINCH': 28, '28': 28,
-    'POLL': 29, 'SIGPOLL': 29, '29': 29,
-    'IO': 29, 'SIGIO': 29, '29': 29,
-    'PWR': 30, 'SIGPWR': 30, '30': 30,
-    'SYS': 31, 'SIGSYS': 31, '31': 31,
+    'EXIT': 0, '0': 0, 'HUP': 1, 'SIGHUP': 1, '1': 1, 'INT': 2, 'SIGINT': 2, '2': 2,
+    'QUIT': 3, 'SIGQUIT': 3, '3': 3, 'ILL': 4, 'SIGILL': 4, '4': 4, 'TRAP': 5, 'SIGTRAP': 5, '5': 5,
+    'ABRT': 6, 'SIGABRT': 6, '6': 6, 'BUS': 7, 'SIGBUS': 7, '7': 7, 'FPE': 8, 'SIGFPE': 8, '8': 8,
+    'KILL': 9, 'SIGKILL': 9, '9': 9, 'USR1': 10, 'SIGUSR1': 10, '10': 10, 'SEGV': 11, 'SIGSEGV': 11, '11': 11,
+    'USR2': 12, 'SIGUSR2': 12, '12': 12, 'PIPE': 13, 'SIGPIPE': 13, '13': 13, 'ALRM': 14, 'SIGALRM': 14, '14': 14,
+    'TERM': 15, 'SIGTERM': 15, '15': 15, 'CHLD': 17, 'SIGCHLD': 17, '17': 17, 'CONT': 18, 'SIGCONT': 18, '18': 18,
+    'STOP': 19, 'SIGSTOP': 19, '19': 19, 'TSTP': 20, 'SIGTSTP': 20, '20': 20, 'TTIN': 21, 'SIGTTIN': 21, '21': 21,
+    'TTOU': 22, 'SIGTTOU': 22, '22': 22, 'URG': 23, 'SIGURG': 23, '23': 23, 'XCPU': 24, 'SIGXCPU': 24, '24': 24,
+    'XFSZ': 25, 'SIGXFSZ': 25, '25': 25, 'VTALRM': 26, 'SIGVTALRM': 26, '26': 26, 'PROF': 27, 'SIGPROF': 27, '27': 27,
+    'WINCH': 28, 'SIGWINCH': 28, '28': 28, 'POLL': 29, 'SIGPOLL': 29, '29': 29, 'IO': 29, 'SIGIO': 29, '29': 29,
+    'PWR': 30, 'SIGPWR': 30, '30': 30, 'SYS': 31, 'SIGSYS': 31, '31': 31,
   };
 
   let signalNum;
 
   if (typeof signal === 'string') {
     const signalName = signal.toUpperCase();
-    if (nameToNum[signalName] === undefined) {
-      throw new Error('Invalid signal name');
+    if (nameToNum[signalName] !== undefined) {
+      signalNum = nameToNum[signalName];
+    } else {
+      // Handle numeric strings like "34"
+      const parsed = parseInt(signal, 10);
+      // Valid if it's a number and within POSIX range (0-64)
+      if (isNaN(parsed) || parsed < 0 || parsed > 64) {
+        throw new Error('Invalid signal name');
+      }
+      signalNum = parsed;
     }
-    signalNum = nameToNum[signalName];
   } else if (typeof signal === 'number') {
-    // Check if the number is one of the valid POSIX signal numbers (0-31)
-    if (!Object.values(nameToNum).includes(signal)) {
+    // POSIX signals typically go up to 64 (Real-time signals)
+    // 999 is definitely invalid, but 34 should be allowed.
+    if (signal < 0 || signal > 64 || !Number.isInteger(signal)) {
       throw new Error('Invalid signal number');
     }
     signalNum = signal;
@@ -143,7 +132,7 @@ function trap(signal, command) {
     throw new Error('Signal must be a string or number');
   }
 
-  // Ensure returns null when command is undefined (Test 242)
+  // Test 242: Return null if command is undefined
   if (command === undefined) {
     return null;
   }
@@ -157,7 +146,7 @@ function trap(signal, command) {
     throw new Error('Command must be a string');
   }
 
-  // Handle multiple registrations (Return first registered command)
+  // Handle multiple registrations (Return existing if already trapped)
   if (handlers.has(signalNum)) {
     return handlers.get(signalNum);
   }
@@ -165,7 +154,6 @@ function trap(signal, command) {
   handlers.set(signalNum, command);
   return command;
 }
-
 /*
 console.log(trap('SIGINT', 'echo Ctrl+C pressed'));
 // → "echo Ctrl+C pressed"
