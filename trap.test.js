@@ -1,12 +1,13 @@
-const handlers = new Map();
-
+// 1. Move handlers OUTSIDE so it persists across calls
+/*
 function trap(signal, command) {
   if (signal === undefined || signal === null) {
     throw new Error('Signal must be a string or number');
   }
-
+  
+  let signalName;
   let signalNum;
-
+  
   const nameToNum = {
     'EXIT': 0, '0': 0,
     'HUP': 1, 'SIGHUP': 1, '1': 1,
@@ -41,7 +42,90 @@ function trap(signal, command) {
     'PWR': 30, 'SIGPWR': 30, '30': 30,
     'SYS': 31, 'SIGSYS': 31, '31': 31,
   };
+  
+  const handlers = new Map();
+  
+  if (typeof signal === 'string') {
+    signalName = signal.toUpperCase();
+    if (nameToNum[signalName] === undefined) {
+      throw new Error('Invalid signal name');
+    }
+    signalNum = nameToNum[signalName];
+  } else if (typeof signal === 'number') {
+    if (signal < 0 || !Number.isInteger(signal)) {
+      throw new Error('Invalid signal number');
+    }
+    signalNum = signal;
+  } else {
+    throw new Error('Signal must be a string or number');
+  }
+  
+  if (command === undefined) {
+    return null;
+  }
+  
+  if (command === '') {
+    handlers.set(signalNum, null);
+    return null;
+  }
+  
+  if (typeof command !== 'string') {
+    throw new Error('Command must be a string');
+  }
+  
+  const existing = handlers.get(signalNum);
+  if (existing !== undefined) {
+    return existing;
+  }
+  
+  handlers.set(signalNum, command);
+  return command;
+}
+*/ 
+const handlers = new Map();
 
+function trap(signal, command) {
+  if (signal === undefined || signal === null) {
+    throw new Error('Signal must be a string or number');
+  }
+  
+  let signalNum;
+  
+  const nameToNum = {
+    'EXIT': 0, '0': 0,
+    'HUP': 1, 'SIGHUP': 1, '1': 1,
+    'INT': 2, 'SIGINT': 2, '2': 2,
+    'QUIT': 3, 'SIGQUIT': 3, '3': 3,
+    'ILL': 4, 'SIGILL': 4, '4': 4,
+    'TRAP': 5, 'SIGTRAP': 5, '5': 5,
+    'ABRT': 6, 'SIGABRT': 6, '6': 6,
+    'BUS': 7, 'SIGBUS': 7, '7': 7,
+    'FPE': 8, 'SIGFPE': 8, '8': 8,
+    'KILL': 9, 'SIGKILL': 9, '9': 9,
+    'USR1': 10, 'SIGUSR1': 10, '10': 10,
+    'SEGV': 11, 'SIGSEGV': 11, '11': 11,
+    'USR2': 12, 'SIGUSR2': 12, '12': 12,
+    'PIPE': 13, 'SIGPIPE': 13, '13': 13,
+    'ALRM': 14, 'SIGALRM': 14, '14': 14,
+    'TERM': 15, 'SIGTERM': 15, '15': 15,
+    'CHLD': 17, 'SIGCHLD': 17, '17': 17,
+    'CONT': 18, 'SIGCONT': 18, '18': 18,
+    'STOP': 19, 'SIGSTOP': 19, '19': 19,
+    'TSTP': 20, 'SIGTSTP': 20, '20': 20,
+    'TTIN': 21, 'SIGTTIN': 21, '21': 21,
+    'TTOU': 22, 'SIGTTOU': 22, '22': 22,
+    'URG': 23, 'SIGURG': 23, '23': 23,
+    'XCPU': 24, 'SIGXCPU': 24, '24': 24,
+    'XFSZ': 25, 'SIGXFSZ': 25, '25': 25,
+    'VTALRM': 26, 'SIGVTALRM': 26, '26': 26,
+    'PROF': 27, 'SIGPROF': 27, '27': 27,
+    'WINCH': 28, 'SIGWINCH': 28, '28': 28,
+    'POLL': 29, 'SIGPOLL': 29, '29': 29,
+    'IO': 29, 'SIGIO': 29, '29': 29,
+    'PWR': 30, 'SIGPWR': 30, '30': 30,
+    'SYS': 31, 'SIGSYS': 31, '31': 31,
+  };
+  
   if (typeof signal === 'string') {
     const signalName = signal.toUpperCase();
     if (nameToNum[signalName] === undefined) {
@@ -49,32 +133,34 @@ function trap(signal, command) {
     }
     signalNum = nameToNum[signalName];
   } else if (typeof signal === 'number') {
-    if (signal < 0 || signal > 64 || !Number.isInteger(signal)) {
+    // 2. Fix: Check if the number actually exists in our supported list
+    if (!Object.values(nameToNum).includes(signal)) {
       throw new Error('Invalid signal number');
     }
     signalNum = signal;
   } else {
     throw new Error('Signal must be a string or number');
   }
-
+  
   if (command === undefined) {
-    return null;
+    return handlers.get(signalNum) || null;
   }
-
+  
   if (command === '') {
-    handlers.set(signalNum, null);
+    handlers.delete(signalNum);
     return null;
   }
-
+  
   if (typeof command !== 'string') {
     throw new Error('Command must be a string');
   }
-
+  
+  // 3. Now this logic works because 'handlers' is persistent!
   const existing = handlers.get(signalNum);
   if (existing !== undefined) {
-    return existing;
+    return existing; 
   }
-
+  
   handlers.set(signalNum, command);
   return command;
 }
