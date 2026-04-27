@@ -25,6 +25,7 @@
     "webpack-dev-server": "^5.2.0"
   },
   "dependencies": {
-    "lucide": "^0.473.0"
+    "lucide": "^0.473.0",
+    "shellwords": "@^1.0.1"
   }
 }
