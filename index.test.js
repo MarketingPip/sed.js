@@ -567,3 +567,238 @@ ta
     });
   });
 });
+
+
+describe('Advanced / Missing Coverage', () => {
+  describe('Alternate Delimiters', () => {
+    it('supports alternate delimiter (#)', async () => {
+      await expectSameSedOutput({
+        portCommand: "s#/path#/newpath#",
+        systemArgs: ["s#/path#/newpath#"],
+        stdin: "/path/to/file",
+      });
+    });
+
+    it('supports alternate delimiter (|)', async () => {
+      await expectSameSedOutput({
+        portCommand: "s|foo|bar|g",
+        systemArgs: ["s|foo|bar|g"],
+        stdin: "foo foo",
+      });
+    });
+  });
+
+  describe('Nth Occurrence Substitution', () => {
+    it('replaces 2nd occurrence only', async () => {
+      await expectSameSedOutput({
+        portCommand: "s/foo/X/2",
+        systemArgs: ["s/foo/X/2"],
+        stdin: "foo foo foo",
+      });
+    });
+
+    it('replaces 3rd occurrence only', async () => {
+      await expectSameSedOutput({
+        portCommand: "s/a/X/3",
+        systemArgs: ["s/a/X/3"],
+        stdin: "a a a a a",
+      });
+    });
+  });
+
+  describe('Step Addressing (~)', () => {
+    it('prints every 2nd line (0~2)', async () => {
+      await expectSameSedOutput({
+        portCommand: "-n 0~2p",
+        systemArgs: ["-n", "0~2p"],
+        stdin: "1\n2\n3\n4\n5\n6",
+      });
+    });
+
+    it('prints every 3rd line (1~3)', async () => {
+      await expectSameSedOutput({
+        portCommand: "-n 1~3p",
+        systemArgs: ["-n", "1~3p"],
+        stdin: "1\n2\n3\n4\n5\n6",
+      });
+    });
+  });
+
+  describe('Quit Commands', () => {
+    it('q quits after printing line', async () => {
+      await expectSameSedOutput({
+        portCommand: "2q",
+        systemArgs: ["2q"],
+        stdin: "a\nb\nc",
+      });
+    });
+
+    it('Q quits without printing current line', async () => {
+      await expectSameSedOutput({
+        portCommand: "2Q",
+        systemArgs: ["2Q"],
+        stdin: "a\nb\nc",
+      });
+    });
+  });
+
+  describe('Zap (z) Command', () => {
+    it('clears pattern space', async () => {
+      await expectSameSedOutput({
+        portCommand: "z",
+        systemArgs: ["z"],
+        stdin: "hello\nworld",
+      });
+    });
+
+    it('clears only addressed line', async () => {
+      await expectSameSedOutput({
+        portCommand: "2z",
+        systemArgs: ["2z"],
+        stdin: "a\nb\nc",
+      });
+    });
+  });
+
+  describe('List (l) Command', () => {
+    it('prints escaped output', async () => {
+      await expectSameSedOutput({
+        portCommand: "-n l",
+        systemArgs: ["-n", "l"],
+        stdin: "hello\tworld",
+      });
+    });
+
+    it('escapes backslashes', async () => {
+      await expectSameSedOutput({
+        portCommand: "-n l",
+        systemArgs: ["-n", "l"],
+        stdin: "a\\b",
+      });
+    });
+  });
+
+  describe('Extended Regex (-E)', () => {
+    it('supports + quantifier', async () => {
+      await expectSameSedOutput({
+        portCommand: "-E s/a+/X/",
+        systemArgs: ["-E", "s/a+/X/"],
+        stdin: "aaa bbb",
+      });
+    });
+
+    it('supports alternation |', async () => {
+      await expectSameSedOutput({
+        portCommand: "-E s/cat|dog/X/g",
+        systemArgs: ["-E", "s/cat|dog/X/g"],
+        stdin: "cat dog bird",
+      });
+    });
+
+    it('supports grouping + backreferences', async () => {
+      await expectSameSedOutput({
+        portCommand: "-E s/(hello) (world)/\\2 \\1/",
+        systemArgs: ["-E", "s/(hello) (world)/\\2 \\1/"],
+        stdin: "hello world",
+      });
+    });
+  });
+
+  describe('BRE Escapes', () => {
+    it('supports \\+ as quantifier', async () => {
+      await expectSameSedOutput({
+        portCommand: "s/a\\+/X/",
+        systemArgs: ["s/a\\+/X/"],
+        stdin: "aaa",
+      });
+    });
+
+    it('supports \\? optional', async () => {
+      await expectSameSedOutput({
+        portCommand: "s/a\\?b/X/",
+        systemArgs: ["s/a\\?b/X/"],
+        stdin: "ab\nb",
+      });
+    });
+
+    it('supports \\| alternation', async () => {
+      await expectSameSedOutput({
+        portCommand: "s/cat\\|dog/X/",
+        systemArgs: ["s/cat\\|dog/X/"],
+        stdin: "cat\ndog\nbird",
+      });
+    });
+  });
+
+  describe('Relative Address (+N)', () => {
+    it('deletes N lines after match', async () => {
+      await expectSameSedOutput({
+        portCommand: "/^2/,+2d",
+        systemArgs: ["/^2/,+2d"],
+        stdin: "1\n2\n3\n4\n5",
+      });
+    });
+
+    it('prints N lines after match', async () => {
+      await expectSameSedOutput({
+        portCommand: "-n /a/,+1p",
+        systemArgs: ["-n", "/a/,+1p"],
+        stdin: "a\n1\na\n2",
+      });
+    });
+  });
+
+  describe('Grouped Commands {}', () => {
+    it('runs grouped substitution', async () => {
+      await expectSameSedOutput({
+        portCommand: "2{s/b/B/}",
+        systemArgs: ["2{s/b/B/}"],
+        stdin: "a\nb\nc",
+      });
+    });
+
+    it('runs multiple commands inside group', async () => {
+      await expectSameSedOutput({
+        portCommand: "-n 2{s/b/B/;p}",
+        systemArgs: ["-n", "2{s/b/B/;p}"],
+        stdin: "a\nb\nc",
+      });
+    });
+  });
+
+  describe('Range State Tracking', () => {
+    it('handles START to END deletion', async () => {
+      await expectSameSedOutput({
+        portCommand: "/START/,/END/d",
+        systemArgs: ["/START/,/END/d"],
+        stdin: "a\nSTART\nb\nEND\nc",
+      });
+    });
+
+    it('handles unclosed range', async () => {
+      await expectSameSedOutput({
+        portCommand: "/START/,/END/d",
+        systemArgs: ["/START/,/END/d"],
+        stdin: "a\nSTART\nb\nc",
+      });
+    });
+  });
+
+  describe('Substitution Tracking (t / T)', () => {
+    it('t triggers on substitution', async () => {
+      await expectSameSedOutput({
+        portCommand: "s/a/A/; t done; s/b/B/; :done",
+        systemArgs: ["s/a/A/; t done; s/b/B/; :done"],
+        stdin: "a",
+      });
+    });
+
+    it('T triggers when no substitution', async () => {
+      await expectSameSedOutput({
+        portCommand: "s/x/y/; T add; b end; :add; s/$/X/; :end",
+        systemArgs: ["s/x/y/; T add; b end; :add; s/$/X/; :end"],
+        stdin: "a",
+      });
+    });
+  });
+});
