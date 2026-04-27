@@ -885,7 +885,7 @@ async function processContent(content, commands, silent, options = {}) {
   
 
   if (endsWithNewline && output.length > 0) output += "\n";
-  if (output.endsWith("\n")) output = output.slice(0, -1);
+  //if (output.endsWith("\n")) output = output.slice(0, -1);
   return { output, exitCode };
 }
 
