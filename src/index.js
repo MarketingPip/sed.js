@@ -900,7 +900,7 @@ function parseShellString(str) {
   let quoteChar = null;
   let escape = false;
 
-  // 1. Standard Shell Split
+  // 1. Initial split (handling quotes and escapes)
   for (let i = 0; i < str.length; i++) {
     const char = str[i];
     if (escape) { current += char; escape = false; continue; }
@@ -917,40 +917,51 @@ function parseShellString(str) {
   }
   if (current.length > 0) args.push(current);
 
-  // 2. Controlled Re-joining for a/i/c
-  // This regex matches: 
-  // - Start of string OR a non-word char (like ;) 
-  // - Followed by an optional address (digits or /.../)
-  // - Ending in exactly a, i, or c.
+  // 2. Context-aware re-joining
+  const result = [];
   const textCmdRe = /(?:^|[^a-zA-Z0-9\\])(?:\d+|\/[^/]*\/)?[aic]$/;
+  
+  let expectExpression = false;
+  let expressionFound = false;
 
-  for (let i = 0; i < args.length - 1; i++) {
+  for (let i = 0; i < args.length; i++) {
     const token = args[i];
 
-    // SKIP if it's a CLI flag like -i, --in-place, -a, etc.
-    if (token.startsWith('-')) continue;
+    // If this token is a script (either after -e or the first positional script)
+    const isScript = expectExpression || (!token.startsWith('-') && !expressionFound && i > 0);
 
-    if (textCmdRe.test(token)) {
-      // Only join the VERY NEXT token if it's not a flag and not a file
-      // In sed, text commands typically consume the rest of the current script argument.
-      // If the next arg is a file (notes.txt), we shouldn't eat it unless it was quoted.
-      
-      // Lookahead: If the next token looks like a file or another flag, don't join.
-      // This is the "safe" middle ground.
-      const nextToken = args[i + 1];
-      if (!nextToken.startsWith('-') && i + 1 === args.length - 1) {
-        // If it's the last token, it's likely the filename, don't join!
-        break; 
+    if (isScript && textCmdRe.test(token)) {
+      // It's an a/i/c command. Look ahead to see if there is text to join.
+      // We stop joining if we hit the end or the next token is a flag.
+      let j = i + 1;
+      while (j < args.length && !args[j].startsWith('-')) {
+        j++;
       }
       
-      if (!nextToken.startsWith('-')) {
-        const joined = args.splice(i, 2).join(' ');
-        args.splice(i, 0, joined);
+      // Merge the command and all subsequent non-flag tokens into one script string
+      const joined = args.slice(i, j).join(' ');
+      result.push(joined);
+      
+      // Advance the loop index and update state
+      i = j - 1;
+      expressionFound = true;
+      expectExpression = false;
+    } else {
+      result.push(token);
+      
+      // Update state for next iteration
+      if (token === '-e') {
+        expectExpression = true;
+      } else if (!token.startsWith('-') && i > 0) {
+        expressionFound = true; // Mark that the main script has been found
+        expectExpression = false;
+      } else {
+        expectExpression = false;
       }
     }
   }
 
-  return args;
+  return result;
 }
  
 
