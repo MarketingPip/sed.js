@@ -83,7 +83,6 @@ function trap(signal, command) {
 }
 */ 
 
-const handlers = new Map();
 
 const handlers = new Map();
 
