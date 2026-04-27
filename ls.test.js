@@ -166,7 +166,7 @@ export function executeLs(args = [], ctx = {}) {
     stderr: "",
     exitCode: 0,
   }
-
+}
 // --- REAL BASH COMPARISON ---
 
 function escapeForBash(arg) {
@@ -224,5 +224,4 @@ describe("ls command - real bash comparison", () => {
   it("ls -la combined behavior", async () => {
     await run(["-l", "-a"])
   })
-})
-}
+});
