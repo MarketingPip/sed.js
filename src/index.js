@@ -470,6 +470,34 @@ function parseMultipleScripts(scripts, extendedRegex = false) {
   const combinedScript = joinedScripts.join("\n");
   const parser = new SedParser([combinedScript], extendedRegex || extendedRegexFromComment);
   const result = parser.parse();
+  if (result.error) return { ...result, silentMode, extendedRegexMode: extendedRegexFromComment };
+
+  // Validate that all branch targets refer to defined labels
+  const definedLabels = new Set();
+  function collectLabels(commands) {
+    for (const cmd of commands) {
+      if (cmd.type === "label") definedLabels.add(cmd.name);
+      if (cmd.type === "group") collectLabels(cmd.commands);
+    }
+  }
+  function checkBranches(commands) {
+    for (const cmd of commands) {
+      if (["branch", "branchOnSubst", "branchOnNoSubst"].includes(cmd.type)) {
+        if (cmd.label && !definedLabels.has(cmd.label)) {
+          return `can't find label for jump to \`${cmd.label}'`;
+        }
+      }
+      if (cmd.type === "group") {
+        const err = checkBranches(cmd.commands);
+        if (err) return err;
+      }
+    }
+    return null;
+  }
+  collectLabels(result.commands);
+  const labelError = checkBranches(result.commands);
+  if (labelError) return { commands: [], error: labelError, silentMode, extendedRegexMode: extendedRegexFromComment };
+
   return { ...result, silentMode, extendedRegexMode: extendedRegexFromComment };
 }
 
@@ -856,10 +884,7 @@ async function processContent(content, commands, silent, options = {}) {
       cycleIterations++; if (cycleIterations > 10000) break;
       state.restartCycle = false; state.pendingFileReads =[]; state.pendingFileWrites =[];
       await executeCommands(commands, state, ctx, shell);
-      // Propagate any runtime error (e.g. branch to undefined label)
-      if (state.errorMessage) {
-        return { output: "", exitCode: 1, errorMessage: state.errorMessage };
-      };
+
       if (vfs) {
         for (const read of state.pendingFileReads) {
           const filePath = read.filename;
