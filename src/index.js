@@ -376,7 +376,14 @@ class SedParser {
     switch (token.type) {
       case SedTokenType.COMMAND: return this.parseSimpleCommand(token, address);
       case SedTokenType.SUBSTITUTE: this.advance(); return { command: { ...token, type: "substitute", address, extendedRegex: this.extendedRegex } };
-      case SedTokenType.TRANSLITERATE: this.advance(); return { command: { type: "transliterate", address, source: token.source, dest: token.dest } };
+      
+      case SedTokenType.TRANSLITERATE: {
+        this.advance();
+        if (token.source.length !== token.dest.length) {
+          return { command: null, error: `strings are not the same length in 'y' command` };
+        }
+        return { command: { type: "transliterate", address, source: token.source, dest: token.dest } };
+      };
       case SedTokenType.LABEL_DEF: this.advance(); return { command: { type: "label", name: token.label || "" } };
       case SedTokenType.BRANCH: this.advance(); return { command: { type: "branch", address, label: token.label } };
       case SedTokenType.BRANCH_ON_SUBST: this.advance(); return { command: { type: "branchOnSubst", address, label: token.label } };
@@ -785,15 +792,21 @@ async function executeCommands(commands, state, ctx, shell) {
       i++; continue;
     }
 
-    if (["branch", "branchOnSubst", "branchOnNoSubst"].includes(cmd.type)) {
+   if (["branch", "branchOnSubst", "branchOnNoSubst"].includes(cmd.type)) {
       if (isInRange(cmd.address, state.lineNumber, state.totalLines, state.patternSpace, state.rangeStates, state)) {
-        const shouldBranch = cmd.type === "branch" || (cmd.type === "branchOnSubst" && state.substitutionMade) || (cmd.type === "branchOnNoSubst" && !state.substitutionMade);
+        const shouldBranch =
+          cmd.type === "branch" ||
+          (cmd.type === "branchOnSubst" && state.substitutionMade) ||
+          (cmd.type === "branchOnNoSubst" && !state.substitutionMade);
         if (cmd.type === "branchOnSubst" && state.substitutionMade) state.substitutionMade = false;
         if (shouldBranch) {
           if (cmd.label) {
             const target = labelIndex.get(cmd.label);
             if (target !== undefined) { i = target; continue; }
-            state.branchRequest = cmd.label; break;
+            // Label not found — error like real sed
+            state.errorMessage = `sed: can't find label for jump to \`${cmd.label}'`;
+            state.quit = true;
+            break;
           }
           break;
         }
@@ -1063,12 +1076,20 @@ export default async function sed(commandStr, options = {}) {
   const scripts = []; let silent = false; let inPlace = false; let extendedRegex = false; const files = [];
   let implicitScript = [];
 
+  if (scripts.length === 0 || (scripts.length === 1 && scripts[0].trim() === '')) {
+    throw new Error('sed: no script command!');
+  };
+  
+
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (["-n", "--quiet", "--silent"].includes(arg)) silent = true;
     else if (arg === "-i" || arg === "--in-place" || arg.startsWith("-i")) inPlace = true;
     else if (["-E", "-r", "--regexp-extended"].includes(arg)) extendedRegex = true;
-    else if (arg === "-e") { if (i + 1 < args.length) scripts.push(args[++i]); }
+    else if (arg === "-e") {
+      if (i + 1 < args.length) scripts.push(args[++i]);
+      else throw new Error('sed: option requires an argument -- e');
+    };
     else if (arg === "-f") {
       if (i + 1 < args.length) {
         const scriptFile = args[++i];
@@ -1079,6 +1100,10 @@ export default async function sed(commandStr, options = {}) {
     else if (arg.startsWith("--")) throw new Error(`sed: unknown option ${arg}`);
     else if (arg === "-") files.push(arg);
     else if (arg.startsWith("-") && arg.length > 1) {
+      const knownFlags = new Set(['n', 'i', 'e', 'E', 'r', 'f']);
+      for (const ch of arg.slice(1)) {
+        if (!knownFlags.has(ch)) throw new Error(`sed: invalid option -- '${ch}'`);
+      }
       if (arg.includes("n")) silent = true;
       if (arg.includes("i")) inPlace = true;
       if (arg.includes("E") || arg.includes("r")) extendedRegex = true;
