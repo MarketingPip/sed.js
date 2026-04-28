@@ -856,7 +856,10 @@ async function processContent(content, commands, silent, options = {}) {
       cycleIterations++; if (cycleIterations > 10000) break;
       state.restartCycle = false; state.pendingFileReads =[]; state.pendingFileWrites =[];
       await executeCommands(commands, state, ctx, shell);
-
+      // Propagate any runtime error (e.g. branch to undefined label)
+      if (state.errorMessage) {
+        return { output: "", exitCode: 1, errorMessage: state.errorMessage };
+      };
       if (vfs) {
         for (const read of state.pendingFileReads) {
           const filePath = read.filename;
