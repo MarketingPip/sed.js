@@ -83,7 +83,7 @@ world foo hello`
               if(stdinActive() === false){
                 result = await sed(command, { vfs: myVfs, shell:hello});
               }else{
-                result = await sed(command, { stdin: _stdin, shell:hello});
+                result = await sed(command, { vfs: myVfs, stdin: _stdin, shell:hello});
               } 
               
               //await sed(command)
