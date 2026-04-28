@@ -1076,7 +1076,7 @@ export default async function sed(commandStr, options = {}) {
   const scripts = []; let silent = false; let inPlace = false; let extendedRegex = false; const files = [];
   let implicitScript = [];
 
-  if (scripts.length === 0 || (scripts.length === 1 && scripts[0].trim() === '')) {
+  if (args.length === 0 || (args.length === 1 && args[0].trim() === '')) {
     throw new Error('sed: no script command!');
   };
   
