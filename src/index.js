@@ -1089,7 +1089,7 @@ export default async function sed(commandStr, options = {}) {
     else if (arg === "-e") {
       if (i + 1 < args.length) scripts.push(args[++i]);
       else throw new Error('sed: option requires an argument -- e');
-    };
+    }
     else if (arg === "-f") {
       if (i + 1 < args.length) {
         const scriptFile = args[++i];
