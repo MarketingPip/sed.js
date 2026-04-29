@@ -1,3 +1,4 @@
+/*
 function cal(...args) {
   const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
   const monthShort = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -127,6 +128,151 @@ console.log(params)
 
   return renderMonth(targetDate.getMonth() + 1, targetDate.getFullYear());
 }
+*/
+
+function cal(...args) {
+  const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  const monthShort = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+  let options = { sunday: true, reform: '1752', vertical: false, ordinal: false, monthsCount: 1, yearOnly: false, span: false };
+  let params = [];
+  const now = new Date();
+
+  // 1. Argument Parsing
+  for (let i = 0; i < args.length; i++) {
+    let arg = args[i];
+    if (arg === null || arg === undefined) continue;
+    if (arg === '-s') { options.sunday = true; continue; }
+    if (arg === '-m') { options.sunday = false; continue; }
+    if (arg === '-v') { options.vertical = true; continue; }
+    if (arg === '-j') { options.ordinal = true; continue; }
+    if (arg === '-y') { options.yearOnly = true; continue; }
+    if (arg === '-3') { options.span = true; options.monthsCount = 3; continue; }
+    if (arg === '-n') { options.monthsCount = parseInt(args[++i]); continue; }
+    if (arg === '--iso') { options.reform = 'gregorian'; continue; }
+    if (arg === '--reform') { options.reform = args[++i]; continue; }
+
+    if (typeof arg === 'string') {
+      const lower = arg.toLowerCase();
+      if (lower === 'tomorrow') { params.push(new Date(now.getTime() + 86400000)); continue; }
+      if (lower === 'today') { params.push(now); continue; }
+      if (lower === 'yesterday') { params.push(new Date(now.getTime() - 86400000)); continue; }
+      
+      let mIdx = monthNames.findIndex(m => m.toLowerCase() === lower);
+      if (mIdx === -1) mIdx = monthShort.findIndex(m => m.toLowerCase() === lower);
+      if (mIdx !== -1) { params.push(mIdx + 1); continue; }
+    }
+    params.push(arg);
+  }
+
+  // 2. Target Date Resolution
+  let targetDate = new Date();
+  if (params.length === 1) {
+    if (params[0] instanceof Date) {
+      targetDate = params[0];
+    } else {
+      const yr = parseInt(params[0]);
+      if (isNaN(yr)) throw new Error("Invalid argument");
+      targetDate = new Date(yr, 0, 1);
+    }
+  } else if (params.length >= 2) {
+    let m = params[0], y = parseInt(params[1]);
+    if (typeof m === 'string') {
+      let mIdx = monthNames.findIndex(name => name.toLowerCase() === m.toLowerCase()) || 
+                 monthShort.findIndex(name => name.toLowerCase() === m.toLowerCase());
+      if (mIdx === -1) throw new Error("Invalid month");
+      m = mIdx + 1;
+    }
+    if (m < 1 || m > 12 || isNaN(y)) throw new Error("Invalid month/year");
+    targetDate = new Date(y, m - 1, (params[2] || 1));
+  }
+
+  const isLeap = (y, reform) => {
+    if (reform === 'julian' || (reform === '1752' && y < 1752)) return y % 4 === 0;
+    return (y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0));
+  };
+
+  const getDaysInMonth = (m, y) => {
+    if (options.reform === '1752' && y === 1752 && m === 9) return 19; // 30 - 11 dropped days
+    const leap = isLeap(y, options.reform);
+    return [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1];
+  };
+
+  const getFirstDayOfWeek = (m, y) => {
+    let d = new Date(y, m - 1, 1);
+    let day = d.getDay(); 
+    return options.sunday ? day : (day + 6) % 7;
+  };
+
+  // 3. The Specialized Render Logic
+  const renderMonth = (m, y) => {
+    const name = monthNames[m - 1];
+    const header = options.sunday ? "Su Mo Tu We Th Fr Sa" : "Mo Tu We Th Fr Sa Su";
+    let out = `${name} ${y}\n${header}\n`;
+    
+    let startDay = getFirstDayOfWeek(m, y);
+    let line = " ".repeat(startDay * 3);
+    let col = startDay;
+
+    // Ordinal day tracking for -j flag
+    let dayOfYear = 0;
+    if (options.ordinal) {
+        for(let prevM = 1; prevM < m; prevM++) dayOfYear += getDaysInMonth(prevM, y);
+    }
+
+    const daysCount = (options.reform === '1752' && y === 1752 && m === 9) ? 30 : getDaysInMonth(m, y);
+
+    for (let d = 1; d <= daysCount; d++) {
+      // The 1752 Gap: Sept 3rd-13th vanished
+      if (options.reform === '1752' && y === 1752 && m === 9 && d > 2 && d < 14) continue;
+
+      let displayVal = options.ordinal ? (dayOfYear + d) : d;
+      line += displayVal.toString().padStart(2, ' ') + " ";
+      col++;
+
+      if (col % 7 === 0) {
+        out += line.trimEnd() + "\n";
+        line = "";
+        col = 0;
+      }
+    }
+    
+    if (line) out += line.trimEnd() + "\n";
+    return out.trimEnd();
+  };
+
+  // 4. Output Modes
+  if (options.vertical) {
+    // Basic vertical placeholder - actual cal -v usually pivots the axis
+    return `--- Vertical: ${monthNames[targetDate.getMonth()]} ---\n` + renderMonth(targetDate.getMonth() + 1, targetDate.getFullYear());
+  }
+
+  if (options.yearOnly) {
+    let res = [];
+    for (let m = 1; m <= 12; m++) res.push(renderMonth(m, targetDate.getFullYear()));
+    return res.join("\n\n");
+  }
+
+  if (options.monthsCount > 1) {
+    let res = [];
+    let curM = targetDate.getMonth() + 1;
+    let curY = targetDate.getFullYear();
+    
+    if (options.span) { // Center the target month
+      curM--;
+      if (curM === 0) { curM = 12; curY--; }
+    }
+
+    for (let i = 0; i < options.monthsCount; i++) {
+      res.push(renderMonth(curM, curY));
+      curM++;
+      if (curM > 12) { curM = 1; curY++; }
+    }
+    return res.join("\n\n");
+  }
+
+  return renderMonth(targetDate.getMonth() + 1, targetDate.getFullYear());
+}
 /*
 test('cal() with no arguments returns current month', () => {
   const result = cal();
@@ -239,4 +385,4 @@ console.log( cal("-n", "6"))
 
 console.log( cal("March", "2006"))
 
-console.log(cal('NotAMonth', 2024))
+//console.log(cal('NotAMonth', 2024))
