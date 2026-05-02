@@ -287,7 +287,41 @@ describe('error cases', () => {
 });
 
 describe('edge cases', () => {
-  it('single value', async () => expectSameExpr({ args: ['42'] }));
-  it('"" = ""',      async () => expectSameExpr({ args: ['', '=', ''] }));
-  it('0 | 5 = 5',   async () => expectSameExpr({ args: ['0', '|', '5'] }));
+  it('single value',         async () => expectSameExpr({ args: ['42'] }));
+  it('"" = ""',              async () => expectSameExpr({ args: ['', '=', ''] }));
+  it('0 | 5 = 5',           async () => expectSameExpr({ args: ['0', '|', '5'] }));
+  it('negative literal -1',  async () => expectSameExpr({ args: ['-1'] }));
+  it('-1 + 1 = 0 (false)',   async () => expectSameExpr({ args: ['-1', '+', '1'] }));
+});
+
+describe('chained operations', () => {
+  it('1 + 2 + 3 = 6',        async () => expectSameExpr({ args: ['1', '+', '2', '+', '3'] }));
+  it('10 - 3 - 2 - 1 = 4',   async () => expectSameExpr({ args: ['10', '-', '3', '-', '2', '-', '1'] }));
+  it('2 * 3 + 4 = 10',       async () => expectSameExpr({ args: ['2', '*', '3', '+', '4'] }));
+  it('1 + 2 = 3 (mixed arith+cmp)', async () => expectSameExpr({ args: ['1', '+', '2', '=', '3'] }));
+});
+
+describe('nested parentheses', () => {
+  it('((2 + 3)) * 4 = 20',   async () => expectSameExpr({ args: ['(', '(', '2', '+', '3', ')', ')', '*', '4'] }));
+  it('(2 + (3 * 4)) = 14',   async () => expectSameExpr({ args: ['(', '2', '+', '(', '3', '*', '4', ')', ')'] }));
+});
+
+describe('logical operators — empty string', () => {
+  it('"" & "x" = 0',         async () => expectSameExpr({ args: ['', '&', 'x'] }));
+  it('"x" & "" = 0',         async () => expectSameExpr({ args: ['x', '&', ''] }));
+  it('"" | "" = ""  (false)', async () => expectSameExpr({ args: ['', '|', ''] }));
+  it('"" | "x" = x',         async () => expectSameExpr({ args: ['', '|', 'x'] }));
+});
+
+describe('regex match operator (:) — capture groups', () => {
+  // POSIX: \( \) capture group → return captured text, not length
+  it('capture group returns text',         async () => expectSameExpr({ args: ['foobar', ':', '\\(foo\\)'] }));
+  it('capture group no match returns ""',  async () => expectSameExpr({ args: ['foobar', ':', '\\(baz\\)'] }));
+  it('partial capture',                    async () => expectSameExpr({ args: ['abc123', ':', '[a-z]*\\([0-9]*\\)'] }));
+});
+
+describe('string functions — substr boundaries', () => {
+  it('pos beyond length returns ""',  async () => expectSameExpr({ args: ['substr', 'abc', '99', '3'] }));
+  it('len = 0 returns ""',            async () => expectSameExpr({ args: ['substr', 'abc', '1', '0'] }));
+  it('negative len returns ""',       async () => expectSameExpr({ args: ['substr', 'abc', '1', '-1'] }));
 });
