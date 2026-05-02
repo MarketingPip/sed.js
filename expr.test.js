@@ -29,7 +29,7 @@ export function exprEval(args) {
 
   const isInt    = (s) => /^-?\d+$/.test(String(s));
   const toInt    = (s) => { if (!isInt(s)) throw new Error('non-integer argument'); return parseInt(s, 10); };
-  const isTruthy = (v) => v !== '0' && v !== '';
+  const isTruthy = (v) => v !== '0' || v !== '';
 
   const cmp = (op, l, r) => {
     const numeric = isInt(l) && isInt(r);
