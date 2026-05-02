@@ -2,12 +2,10 @@
  * GNU echo port in JavaScript
  * Spec: https://www.man7.org/linux/man-pages/man1/echo.1.html
  *
- * Run tests:  node --test echo.js
+ * Run tests:  npx jest echo.js
  */
 
-import { spawnSync }        from "node:child_process"
-import { describe, it }     from "node:test"
-import assert               from "node:assert/strict"
+import { spawnSync } from "child_process"
 
 // ─────────────────────────────────────────────
 // Constants
@@ -180,7 +178,7 @@ export async function executeEcho(args, ctx = {}) {
   // ── Short-option parsing ──────────────────────────────────────────────────
   // GNU echo does not use getopt; it greedily consumes leading arguments that
   // look like valid flag strings (-[neE]+) and stops at the first non-flag arg.
-  let noNewline      = false
+  let noNewline        = false
   let interpretEscapes = ctx.xpgEcho ?? false   // -E is the default
 
   let i = 0
@@ -220,18 +218,14 @@ function bashEcho(args) {
   return { stdout, stderr, exitCode: status }
 }
 
-/**
- * Assert that executeEcho(args) produces the same stdout as bash's echo.
- * Returns the shared result for further assertions if needed.
- */
+/** Assert that executeEcho(args) produces the same stdout as bash's echo. */
 async function matchesBash(args) {
   const [impl, bash] = await Promise.all([
     executeEcho(args),
     Promise.resolve(bashEcho(args))
   ])
-  assert.equal(impl.stdout,   bash.stdout,   `stdout mismatch for: ${JSON.stringify(args)}`)
-  assert.equal(impl.exitCode, bash.exitCode, `exitCode mismatch for: ${JSON.stringify(args)}`)
-  return impl
+  expect(impl.stdout).toBe(bash.stdout)
+  expect(impl.exitCode).toBe(bash.exitCode)
 }
 
 // ─────────────────────────────────────────────
@@ -239,35 +233,34 @@ async function matchesBash(args) {
 // ─────────────────────────────────────────────
 
 describe("echo — bash parity", () => {
-
-  it("plain string",              () => matchesBash(["hello"]))
-  it("multiple arguments",        () => matchesBash(["one", "two", "three"]))
-  it("empty args",                () => matchesBash([]))
-  it("-n suppresses newline",     () => matchesBash(["-n", "hello"]))
-  it("-e enables escapes",        () => matchesBash(["-e", "line1\\nline2"]))
-  it("-E disables escapes",       () => matchesBash(["-E", "line1\\nline2"]))
-  it("-e with tab",               () => matchesBash(["-e", "col1\\tcol2"]))
-  it("-e with backslash",         () => matchesBash(["-e", "a\\\\b"]))
-  it("-e with \\r",               () => matchesBash(["-e", "a\\rb"]))
-  it("-e with \\v",               () => matchesBash(["-e", "a\\vb"]))
-  it("-e with \\f",               () => matchesBash(["-e", "a\\fb"]))
-  it("-ne combined flag",         () => matchesBash(["-ne", "no\\nnewline"]))
-  it("-en combined flag",         () => matchesBash(["-en", "no\\nnewline"]))
-  it("-nE combined flag",         () => matchesBash(["-nE", "no\\nnewline"]))
-  it("\\c stops output",          () => matchesBash(["-e", "hello\\c world"]))
-  it("\\c at start",              () => matchesBash(["-e", "\\c hello"]))
-  it("octal \\0112 → J",         () => matchesBash(["-e", "char: \\0112"]))
-  it("octal \\0101 → A",         () => matchesBash(["-e", "\\0101"]))
-  it("octal \\07 → BEL",         () => matchesBash(["-e", "\\07"]))
-  it("octal \\0 → NUL byte",     () => matchesBash(["-e", "\\0"]))
-  it("hex \\x41 → A",            () => matchesBash(["-e", "char: \\x41"]))
-  it("hex \\x61 → a",            () => matchesBash(["-e", "\\x61"]))
-  it("hex single digit \\x9",    () => matchesBash(["-e", "\\x9"]))
-  it("unknown escape literal",    () => matchesBash(["-e", "\\q"]))
-  it("\\x with no digits",        () => matchesBash(["-e", "\\x not hex"]))
-  it("flags without operands",    () => matchesBash(["-n"]))
-  it("non-flag arg stops parsing",() => matchesBash(["-n", "hello", "-e"]))
-  it("arg that looks like flag after non-flag", () => matchesBash(["text", "-e", "\\n"]))
+  it("plain string",                             () => matchesBash(["hello"]))
+  it("multiple arguments",                       () => matchesBash(["one", "two", "three"]))
+  it("empty args",                               () => matchesBash([]))
+  it("-n suppresses newline",                    () => matchesBash(["-n", "hello"]))
+  it("-e enables escapes",                       () => matchesBash(["-e", "line1\\nline2"]))
+  it("-E disables escapes",                      () => matchesBash(["-E", "line1\\nline2"]))
+  it("-e with tab",                              () => matchesBash(["-e", "col1\\tcol2"]))
+  it("-e with backslash",                        () => matchesBash(["-e", "a\\\\b"]))
+  it("-e with \\r",                              () => matchesBash(["-e", "a\\rb"]))
+  it("-e with \\v",                              () => matchesBash(["-e", "a\\vb"]))
+  it("-e with \\f",                              () => matchesBash(["-e", "a\\fb"]))
+  it("-ne combined flag",                        () => matchesBash(["-ne", "no\\nnewline"]))
+  it("-en combined flag",                        () => matchesBash(["-en", "no\\nnewline"]))
+  it("-nE combined flag",                        () => matchesBash(["-nE", "no\\nnewline"]))
+  it("\\c stops output",                         () => matchesBash(["-e", "hello\\c world"]))
+  it("\\c at start",                             () => matchesBash(["-e", "\\c hello"]))
+  it("octal \\0112 → J",                         () => matchesBash(["-e", "char: \\0112"]))
+  it("octal \\0101 → A",                         () => matchesBash(["-e", "\\0101"]))
+  it("octal \\07 → BEL",                         () => matchesBash(["-e", "\\07"]))
+  it("octal \\0 → NUL byte",                     () => matchesBash(["-e", "\\0"]))
+  it("hex \\x41 → A",                            () => matchesBash(["-e", "char: \\x41"]))
+  it("hex \\x61 → a",                            () => matchesBash(["-e", "\\x61"]))
+  it("hex single digit \\x9",                    () => matchesBash(["-e", "\\x9"]))
+  it("unknown escape emits literally",           () => matchesBash(["-e", "\\q"]))
+  it("\\x with no digits emits literally",       () => matchesBash(["-e", "\\x not hex"]))
+  it("flags without operands",                   () => matchesBash(["-n"]))
+  it("non-flag arg stops flag parsing",          () => matchesBash(["-n", "hello", "-e"]))
+  it("non-flag before -e keeps -e as literal",   () => matchesBash(["text", "-e", "\\n"]))
 })
 
 // ─────────────────────────────────────────────
@@ -275,94 +268,91 @@ describe("echo — bash parity", () => {
 // ─────────────────────────────────────────────
 
 describe("echo — unit tests", () => {
-
   it("--help returns help text", async () => {
     const r = await executeEcho(["--help"])
-    assert.equal(r.exitCode, 0)
-    assert.ok(r.stdout.includes("--help"), "help text should mention --help")
-    assert.ok(r.stdout.includes("-e"),     "help text should mention -e")
-    assert.ok(r.stdout.includes("\\0NNN"), "help text should mention octal")
-    assert.ok(r.stdout.includes("\\xHH"), "help text should mention hex")
+    expect(r.exitCode).toBe(0)
+    expect(r.stdout).toContain("--help")
+    expect(r.stdout).toContain("-e")
+    expect(r.stdout).toContain("\\0NNN")
+    expect(r.stdout).toContain("\\xHH")
   })
 
   it("--version returns version string", async () => {
     const r = await executeEcho(["--version"])
-    assert.equal(r.exitCode, 0)
-    assert.ok(r.stdout.startsWith("echo (GNU coreutils)"))
+    expect(r.exitCode).toBe(0)
+    expect(r.stdout).toMatch(/^echo \(GNU coreutils\)/)
   })
 
   it("--help with extra args is NOT treated as long option", async () => {
-    // Only a lone --help triggers the long-option path
     const r = await executeEcho(["--help", "extra"])
-    assert.notEqual(r.stdout, HELP_TEXT)
+    expect(r.stdout).not.toBe(HELP_TEXT)
   })
 
   it("\\a produces BEL (0x07)", async () => {
     const r = await executeEcho(["-e", "\\a"])
-    assert.equal(r.stdout, "\x07\n")
+    expect(r.stdout).toBe("\x07\n")
   })
 
   it("\\b produces backspace (0x08)", async () => {
     const r = await executeEcho(["-e", "\\b"])
-    assert.equal(r.stdout, "\b\n")
+    expect(r.stdout).toBe("\b\n")
   })
 
   it("\\e produces ESC (0x1b)", async () => {
     const r = await executeEcho(["-e", "\\e"])
-    assert.equal(r.stdout, "\x1b\n")
+    expect(r.stdout).toBe("\x1b\n")
   })
 
   it("\\E also produces ESC (GNU extension)", async () => {
     const r = await executeEcho(["-e", "\\E"])
-    assert.equal(r.stdout, "\x1b\n")
+    expect(r.stdout).toBe("\x1b\n")
   })
 
   it("trailing lone backslash emits backslash", async () => {
     const r = await executeEcho(["-e", "hello\\"])
-    assert.equal(r.stdout, "hello\\\n")
+    expect(r.stdout).toBe("hello\\\n")
   })
 
-  it("-e flag without escapes is a no-op on plain text", async () => {
+  it("-e on plain text is a no-op", async () => {
     const r = await executeEcho(["-e", "plain"])
-    assert.equal(r.stdout, "plain\n")
+    expect(r.stdout).toBe("plain\n")
   })
 
   it("octal overflow wraps at 256", async () => {
-    // \0400 = 256 in octal → 256 % 256 = 0 → NUL
+    // \0400 = 256 decimal → 256 & 0xff = 0 → NUL
     const r = await executeEcho(["-e", "\\0400"])
-    assert.equal(r.stdout.charCodeAt(0), 0)
+    expect(r.stdout.charCodeAt(0)).toBe(0)
   })
 
-  it("octal max 3 digits — 4th digit is literal", async () => {
-    // \01234  → octal(123) + literal '4'
+  it("octal stops at 3 digits — 4th digit is literal", async () => {
+    // \01234 → octal(123) + '4'
     const r = await executeEcho(["-e", "\\01234"])
-    const expected = String.fromCharCode(parseInt("123", 8) & 0xff) + "4\n"
-    assert.equal(r.stdout, expected)
+    expect(r.stdout).toBe(String.fromCharCode(parseInt("123", 8) & 0xff) + "4\n")
   })
 
-  it("hex max 2 digits — 3rd hex char is literal", async () => {
-    // \x414 → chr(0x41) + '4'  i.e. 'A4'
+  it("hex stops at 2 digits — 3rd hex char is literal", async () => {
+    // \x414 → chr(0x41) + '4' = 'A4'
     const r = await executeEcho(["-e", "\\x414"])
-    assert.equal(r.stdout, "A4\n")
+    expect(r.stdout).toBe("A4\n")
   })
 
   it("xpgEcho ctx flag enables escape interpretation", async () => {
     const r = await executeEcho(["hello\\nworld"], { xpgEcho: true })
-    assert.equal(r.stdout, "hello\nworld\n")
+    expect(r.stdout).toBe("hello\nworld\n")
   })
 
   it("xpgEcho ctx flag is overridden by explicit -E", async () => {
     const r = await executeEcho(["-E", "hello\\nworld"], { xpgEcho: true })
-    assert.equal(r.stdout, "hello\\nworld\n")
+    expect(r.stdout).toBe("hello\\nworld\n")
   })
 
-  it("stderr is always empty on success", async () => {
+  it("stderr is always empty", async () => {
     const r = await executeEcho(["anything"])
-    assert.equal(r.stderr, "")
+    expect(r.stderr).toBe("")
   })
 
   it("exitCode is always 0", async () => {
     const r = await executeEcho([])
-    assert.equal(r.exitCode, 0)
+    expect(r.exitCode).toBe(0)
   })
 })
