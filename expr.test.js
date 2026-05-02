@@ -72,7 +72,7 @@ async function expectSameExpr({ args }) {
   return { port, system };
 }
 
-function expr(args) {
+function exprCore(args) {
   if (!args || args.length === 0) throw new Error('Empty arguments');
 
   const precedence = {
@@ -246,6 +246,29 @@ function applyBinaryOp(left, op, right) {
   throw new Error('syntax error');
 }
 
+async function expr(args) {
+  try {
+    const result = exprCore(args);
+
+    const normalized = normalize(result);
+
+    // 🚨 CRITICAL: match expr exit semantics
+    const isFalse = normalized === '0' || normalized === '';
+
+    return {
+      success: !isFalse,   // <-- THIS FIX
+      data: normalized,
+      error: null,
+    };
+  } catch (err) {
+    return {
+      success: false,
+      data: null,
+      error: normalize(err?.message || String(err)),
+    };
+  }
+}
+      
 
 describe('expr vs system expr (basic arithmetic)', () => {
   it('1 + 1', async () => {
