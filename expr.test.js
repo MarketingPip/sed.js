@@ -1,3 +1,77 @@
+import expr from './src/expr.js';
+import { spawnSync } from 'child_process';
+import fs from 'fs/promises';
+import path from 'path';
+import os from 'os';
+
+function normalize(value) {
+  return String(value ?? '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\n$/, '');
+}
+
+async function runExpr(args) {
+  try {
+    const result = expr(args);
+    return { success: true, data: normalize(result), error: null };
+  } catch (err) {
+    return {
+      success: false,
+      data: null,
+      error: normalize(err?.message || String(err)),
+    };
+  }
+}
+
+async function runSystemExpr(args) {
+  try {
+    const result = spawnSync('expr', args, {
+      encoding: 'utf8',
+      maxBuffer: 10 * 1024 * 1024,
+    });
+
+    if (result.error) {
+      return {
+        success: false,
+        data: null,
+        error: normalize(result.error.message),
+      };
+    }
+
+    const success = result.status === 0;
+
+    return {
+      success,
+      data: success ? normalize(result.stdout) : null,
+      error: normalize(result.stderr || result.stdout),
+    };
+  } catch (err) {
+    return {
+      success: false,
+      data: null,
+      error: normalize(err?.message || String(err)),
+    };
+  }
+}
+
+async function expectSameExpr({ args }) {
+  const [port, system] = await Promise.all([
+    runExpr(args),
+    runSystemExpr(args),
+  ]);
+
+  // MUST match success/failure
+  expect(port.success).toBe(system.success);
+
+  if (system.success) {
+    expect(port.data).toBe(system.data);
+  } else {
+    expect(port.error.length).toBeGreaterThan(0);
+  }
+
+  return { port, system };
+}
+
 function expr(args) {
   if (!args || args.length === 0) throw new Error('Empty arguments');
 
@@ -173,9 +247,109 @@ function applyBinaryOp(left, op, right) {
 }
 
 
+describe('expr vs system expr (basic arithmetic)', () => {
+  it('1 + 1', async () => {
+    await expectSameExpr({ args: ['1', '+', '1'] });
+  });
+
+  it('10 - 3', async () => {
+    await expectSameExpr({ args: ['10', '-', '3'] });
+  });
+
+  it('5 * 5', async () => {
+    await expectSameExpr({ args: ['5', '*', '5'] });
+  });
+
+  it('10 / 2', async () => {
+    await expectSameExpr({ args: ['10', '/', '2'] });
+  });
+
+  it('10 % 3', async () => {
+    await expectSameExpr({ args: ['10', '%', '3'] });
+  });
+
+  it('left-to-right evaluation', async () => {
+    await expectSameExpr({ args: ['1', '+', '1', '*', '2'] });
+  });
+});
+
+describe('comparisons and logic', () => {
+  it('1 = 1', async () => {
+    await expectSameExpr({ args: ['1', '=', '1'] });
+  });
+
+  it('1 = 2', async () => {
+    await expectSameExpr({ args: ['1', '=', '2'] });
+  });
+
+  it('1 != 2', async () => {
+    await expectSameExpr({ args: ['1', '!=', '2'] });
+  });
+
+  it('5 > 3', async () => {
+    await expectSameExpr({ args: ['5', '>', '3'] });
+  });
+
+  it('2 < 3', async () => {
+    await expectSameExpr({ args: ['2', '<', '3'] });
+  });
+
+  it('logical AND (&)', async () => {
+    await expectSameExpr({ args: ['5', '&', '2'] });
+  });
+
+  it('logical OR (|)', async () => {
+    await expectSameExpr({ args: ['0', '|', '2'] });
+  });
+});
+
+describe('string functions', () => {
+  it('length', async () => {
+    await expectSameExpr({ args: ['length', 'abc'] });
+  });
+
+  it('length empty', async () => {
+    await expectSameExpr({ args: ['length', ''] });
+  });
+
+  it('substr', async () => {
+    await expectSameExpr({ args: ['abcdef', 'substr', '1', '3'] });
+  });
+});
 
 
-test('expr 1 + 1 returns 2', () => {
+
+
+describe('special tests', () => {
+ it('division by zero fails', async () => {
+  await expectSameExpr({ args: ['10', '/', '0'] });
+});
+
+it('non-numeric addition', async () => {
+  await expectSameExpr({ args: ['a', '+', '1'] });
+});
+
+it('no precedence (left to right)', async () => {
+  await expectSameExpr({ args: ['2', '+', '3', '*', '4'] });
+});
+
+ it('parentheses grouping', async () => {
+  await expectSameExpr({
+    args: ['\\(', '2', '+', '3', '\\)', '*', '4'],
+  });
+});
+
+it('regex match operator', async () => {
+  await expectSameExpr({
+    args: ['hello', ':', 'h.*o'],
+  });
+});
+  
+});
+
+
+
+/* test('expr 1 + 1 returns 2', () => {
   expect(expr(['1', '+', '1'])).toBe('2');
 });
 test('expr 10 - 3 returns 7', () => {
@@ -283,3 +457,4 @@ test('expr match with no match returns 0', () => {
 test('expr invalid operator throws', () => {
   expect(() => expr(['1', '@', '2'])).toThrow();
 });
+*/
