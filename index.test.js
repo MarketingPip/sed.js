@@ -218,6 +218,15 @@ describe('Sed.js FULL Test Suite', () => {
       });
     });
 
+
+    it('deletes matching lines', async () => {
+      await expectSameSedOutput({
+        portCommand: '/apple/d',
+        systemArgs: ['/apple/d'],
+        stdin: 'apple\nbanana\napple',
+      });
+    });
+        
     it('is case-sensitive by default', async () => {
       await expectSameSedOutput({
         portCommand: 's/hello/hi/',
