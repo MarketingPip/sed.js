@@ -345,6 +345,47 @@ describe('regex match operator (:) — capture groups', () => {
   it('partial capture',                    async () => expectSameExpr({ args: ['abc123', ':', '[a-z]*\\([0-9]*\\)'] }));
 });
 
+describe('BRE quantifiers in : operator', () => {
+  // \+ = one-or-more, \? = zero-or-one — translated by breToJs
+  it('\\+ one-or-more matches',       async () => expectSameExpr({ args: ['aaa', ':', 'a\\+'] }));
+  it('\\+ one-or-more no match → 0', async () => expectSameExpr({ args: ['bbb', ':', 'a\\+'] }));
+  it('\\? zero-or-one present',       async () => expectSameExpr({ args: ['ab',  ':', 'a\\?b'] }));
+  it('\\? zero-or-one absent',        async () => expectSameExpr({ args: ['b',   ':', 'a\\?b'] }));
+  it('capture with \\+',              async () => expectSameExpr({ args: ['aaa', ':', '\\(a\\+\\)'] }));
+});
+
+describe('chained : operators (left-to-right)', () => {
+  // Each : feeds its result as the new left operand
+  it('length via chained :',   async () => expectSameExpr({ args: ['foobar', ':', 'foo\\(.*\\)', ':', '.*'] }));
+  it('chain no match → 0',     async () => expectSameExpr({ args: ['foobar', ':', 'xyz', ':', '[0-9]*'] }));
+});
+
+describe('negative number comparisons', () => {
+  it('-1 < 0',   async () => expectSameExpr({ args: ['-1', '<', '0'] }));
+  it('-2 > -5',  async () => expectSameExpr({ args: ['-2', '>', '-5'] }));
+  it('-1 = -1',  async () => expectSameExpr({ args: ['-1', '=', '-1'] }));
+  it('-1 + -1 = -2', async () => expectSameExpr({ args: ['-1', '+', '-1', '=', '-2'] }));
+});
+
+describe('non-integer string comparisons', () => {
+  // 1.5 is not an integer so comparison must be lexicographic
+  it('1.5 = 1.5 (string)',  async () => expectSameExpr({ args: ['1.5', '=', '1.5'] }));
+  it('1.5 > 1.4 (string)',  async () => expectSameExpr({ args: ['1.5', '>', '1.4'] }));
+  it('+1 = 1 (string, not numeric)', async () => expectSameExpr({ args: ['+1', '=', '1'] }));
+});
+
+describe('string functions — length on various inputs', () => {
+  it('length of numeric string', async () => expectSameExpr({ args: ['length', '123'] }));
+  it('length of single char',    async () => expectSameExpr({ args: ['length', 'x'] }));
+  it('length with spaces',       async () => expectSameExpr({ args: ['length', 'hello world'] }));
+});
+
+describe('string functions — index first-occurrence', () => {
+  it('first of multiple matching chars', async () => expectSameExpr({ args: ['index', 'abcabc', 'ca'] }));
+  it('char at position 1',               async () => expectSameExpr({ args: ['index', 'xyz', 'x'] }));
+  it('all chars match, returns 1',       async () => expectSameExpr({ args: ['index', 'aaa', 'a'] }));
+});
+
 describe('string functions — substr boundaries', () => {
   it('pos beyond length returns ""',  async () => expectSameExpr({ args: ['substr', 'abc', '99', '3'] }));
   it('len = 0 returns ""',            async () => expectSameExpr({ args: ['substr', 'abc', '1', '0'] }));
