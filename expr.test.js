@@ -1,483 +1,374 @@
-
 import { spawnSync } from 'child_process';
-import fs from 'fs/promises';
-import path from 'path';
-import os from 'os';
 
-function normalize(value) {
-  return String(value ?? '')
+// ─────────────────────────────────────────────
+// POSIX expr — recursive descent implementation
+// ─────────────────────────────────────────────
+//
+// Operator precedence (low → high):
+//   |   &   = != < <= > >=   + -   * / %   :
+//
+// Exit semantics (matching real expr):
+//   result is non-zero/non-empty → exit 0  (success: true)
+//   result is "0" or ""          → exit 1  (success: false)
+//   any error                    → exit 2  (success: false)
+//
+// Parentheses must be passed as escaped tokens: '\(' '\)'
+// (the shell escaping; by the time args[] arrives they are literal
+//  backslash-paren strings '\\(' '\\)')
+//
+// Special functions consume directly from the arg stream (not a value
+// stack), matching real expr behaviour:
+//   length STR
+//   substr  STR POS LEN     (1-indexed, POSIX)
+//   index   STR CHARS
+
+export function exprEval(args) {
+  if (!Array.isArray(args) || args.length === 0) {
+    throw new Error('syntax error');
+  }
+
+  // Validate: no null/undefined tokens
+  for (const a of args) {
+    if (a === null || a === undefined) throw new Error('syntax error');
+  }
+
+  let pos = 0;
+
+  const peek  = ()  => args[pos];
+  const next  = ()  => args[pos++];
+  const done  = ()  => pos >= args.length;
+
+  // ── helpers ──────────────────────────────────
+
+  // POSIX: both operands must look like [-]digits (no leading zeros issue)
+  const isInt = (s) => /^-?\d+$/.test(String(s));
+
+  const toInt = (s) => {
+    if (!isInt(s)) throw new Error('non-integer argument');
+    return parseInt(s, 10);
+  };
+
+  const isTruthy = (v) => v !== '0' && v !== '';
+
+  const cmp = (op, l, r) => {
+    const numeric = isInt(l) && isInt(r);
+    const lv = numeric ? parseInt(l, 10) : l;
+    const rv = numeric ? parseInt(r, 10) : r;
+    switch (op) {
+      case '=':  return lv === rv;
+      case '!=': return lv !== rv;
+      case '>':  return lv >   rv;
+      case '<':  return lv <   rv;
+      case '>=': return lv >=  rv;
+      case '<=': return lv <=  rv;
+    }
+  };
+
+  // ── parser ───────────────────────────────────
+
+  function parseExpr()    { return parseOr(); }
+
+  function parseOr() {
+    let left = parseAnd();
+    while (peek() === '|') {
+      next();
+      const right = parseAnd();
+      left = isTruthy(left) ? left : right;
+    }
+    return left;
+  }
+
+  function parseAnd() {
+    let left = parseCmp();
+    while (peek() === '&') {
+      next();
+      const right = parseCmp();
+      left = (isTruthy(left) && isTruthy(right)) ? left : '0';
+    }
+    return left;
+  }
+
+  function parseCmp() {
+    let left = parseAdd();
+    const CMP_OPS = new Set(['=', '!=', '>', '<', '>=', '<=']);
+    while (CMP_OPS.has(peek())) {
+      const op = next();
+      const right = parseAdd();
+      left = cmp(op, left, right) ? '1' : '0';
+    }
+    return left;
+  }
+
+  function parseAdd() {
+    let left = parseMul();
+    while (peek() === '+' || peek() === '-') {
+      const op = next();
+      const right = parseMul();
+      left = String(op === '+' ? toInt(left) + toInt(right)
+                               : toInt(left) - toInt(right));
+    }
+    return left;
+  }
+
+  function parseMul() {
+    let left = parseMatch();
+    while (peek() === '*' || peek() === '/' || peek() === '%') {
+      const op   = next();
+      const right = parseMatch();
+      const l = toInt(left);
+      const r = toInt(right);
+      if (r === 0 && (op === '/' || op === '%')) throw new Error('division by zero');
+      if (op === '*') left = String(l * r);
+      if (op === '/') left = String(Math.trunc(l / r));  // POSIX truncates toward zero
+      if (op === '%') left = String(l % r);
+    }
+    return left;
+  }
+
+  function parseMatch() {
+    let left = parsePrimary();
+    while (peek() === ':') {
+      next();
+      const pattern = next();
+      if (pattern === undefined) throw new Error('syntax error');
+      // The : operator anchors at start implicitly
+      let re;
+      try { re = new RegExp('^(?:' + pattern + ')'); }
+      catch { throw new Error('invalid regex'); }
+      const m = String(left).match(re);
+      // If the pattern has a capture group, return the captured text;
+      // otherwise return the match length (or 0 on no match).
+      if (!m) {
+        left = '0';
+      } else if (m[1] !== undefined) {
+        left = m[1];   // first capture group → returned as string
+      } else {
+        left = String(m[0].length);
+      }
+    }
+    return left;
+  }
+
+  function parsePrimary() {
+    const tok = next();
+    if (tok === undefined) throw new Error('syntax error');
+
+    // Escaped open paren  (shell passes \( as the two-char string \( )
+    if (tok === '\\(') {
+      const val = parseExpr();
+      const close = next();
+      if (close !== '\\)') throw new Error('syntax error');
+      return val;
+    }
+
+    // length STR
+    if (tok === 'length') {
+      const str = next();
+      if (str === undefined) throw new Error('syntax error');
+      return String(str.length);
+    }
+
+    // substr STR POS LEN  — 1-indexed, clamps gracefully
+    if (tok === 'substr') {
+      const str = next();
+      const rawPos = next();
+      const rawLen = next();
+      if (str === undefined || rawPos === undefined || rawLen === undefined)
+        throw new Error('syntax error');
+      const p = toInt(rawPos);
+      const l = toInt(rawLen);
+      // POSIX: positions before 1 are treated as 1; negative len → empty
+      const start = Math.max(0, p - 1);
+      const len   = Math.max(0, l);
+      return String(str).substr(start, len);
+    }
+
+    // index STR CHARS  — find first char of STR that appears in CHARS
+    if (tok === 'index') {
+      const str   = next();
+      const chars = next();
+      if (str === undefined || chars === undefined) throw new Error('syntax error');
+      for (let j = 0; j < str.length; j++) {
+        if (chars.includes(str[j])) return String(j + 1);
+      }
+      return '0';
+    }
+
+    // Everything else is a literal value
+    return tok;
+  }
+
+  // ── entry point ──────────────────────────────
+
+  const result = parseExpr();
+
+  // Leftover tokens → syntax error (e.g. unmatched \) )
+  if (!done()) throw new Error('syntax error');
+
+  return String(result ?? '');
+}
+
+// ─────────────────────────────────────────────
+// Wrapper that mirrors the { success, data, error } shape
+// used by the test harness, including POSIX exit semantics.
+// ─────────────────────────────────────────────
+export function runExpr(args) {
+  try {
+    const raw     = exprEval(args);
+    const data    = normalize(raw);
+    const isFalse = data === '0' || data === '';
+    return { success: !isFalse, data, error: null };
+  } catch (err) {
+    return { success: false, data: null, error: normalize(err?.message ?? String(err)) };
+  }
+}
+
+// ─────────────────────────────────────────────
+// Shared utilities
+// ─────────────────────────────────────────────
+function normalize(v) {
+  return String(v ?? '')
     .replace(/\r\n/g, '\n')
     .replace(/\n$/, '');
 }
 
-async function runExpr(args) {
+function runSystemExpr(args) {
   try {
-    const result = expr(args);
-    return { success: true, data: normalize(result), error: null };
-  } catch (err) {
+    const r = spawnSync('expr', args, { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
+    if (r.error) return { success: false, data: null, error: normalize(r.error.message) };
+    const ok = r.status === 0;
     return {
-      success: false,
-      data: null,
-      error: normalize(err?.message || String(err)),
+      success: ok,
+      data:  ok  ? normalize(r.stdout) : null,
+      error: !ok ? normalize(r.stderr || r.stdout) : null,
     };
+  } catch (err) {
+    return { success: false, data: null, error: normalize(err?.message ?? String(err)) };
   }
 }
 
-async function runSystemExpr(args) {
-  try {
-    const result = spawnSync('expr', args, {
-      encoding: 'utf8',
-      maxBuffer: 10 * 1024 * 1024,
-    });
+// ─────────────────────────────────────────────
+// Test harness
+// ─────────────────────────────────────────────
 
-    if (result.error) {
-      return {
-        success: false,
-        data: null,
-        error: normalize(result.error.message),
-      };
-    }
+let passed = 0;
+let failed = 0;
 
-    const success = result.status === 0;
+async function expectSameExpr({ args, label }) {
+  const port   = runExpr(args);
+  const system = runSystemExpr(args);
+  const tag    = label ?? `expr ${args.join(' ')}`;
 
-    return {
-      success,
-      data: success ? normalize(result.stdout) : null,
-      error: normalize(result.stderr || result.stdout),
-    };
-  } catch (err) {
-    return {
-      success: false,
-      data: null,
-      error: normalize(err?.message || String(err)),
-    };
-  }
-}
+  const ok = port.success === system.success &&
+    (system.success ? port.data === system.data : true);
 
-async function expectSameExpr({ args }) {
-  const [port, system] = await Promise.all([
-    runExpr(args),
-    runSystemExpr(args),
-  ]);
-
-  // MUST match success/failure
-  expect(port.success).toBe(system.success);
-
-  if (system.success) {
-    expect(port.data).toBe(system.data);
+  if (ok) {
+    console.log(`  ✓ ${tag}`);
+    passed++;
   } else {
-    expect(port.error.length).toBeGreaterThan(0);
-  }
-
-  return { port, system };
-}
-
-function exprCore(args) {
-  if (!args || args.length === 0) throw new Error('Empty arguments');
-
-  const precedence = {
-    '|': 1, '&': 2,
-    '=': 3, '>': 3, '<': 3, '>=': 3, '<=': 3, '!=': 3,
-    '+': 4, '-': 4,
-    '*': 5, '/': 5, '%': 5,
-    ':': 6
-  };
-
-  const values = [];
-  const operators = [];
-
-  const applyOp = () => {
-    const right = values.pop();
-    const left = values.pop();
-    const op = operators.pop();
-    
-    // Validate Numeric inputs for Arithmetic
-    const isArithmetic = ['+', '-', '*', '/', '%'].includes(op);
-    const lNum = parseInt(left, 10);
-    const rNum = parseInt(right, 10);
-
-    if (isArithmetic && (isNaN(lNum) || isNaN(rNum))) {
-      throw new Error('non-integer argument');
-    }
-
-    const bothNumeric = !isNaN(lNum) && !isNaN(rNum) && 
-                        String(lNum) === String(left) && 
-                        String(rNum) === String(right);
-
-    switch (op) {
-      case '|': return (left !== '0' && left !== '') ? left : right;
-      case '&': return (left !== '0' && left !== '' && right !== '0' && right !== '') ? left : '0';
-      case '+': return String(lNum + rNum);
-      case '-': return String(lNum - rNum);
-      case '*': return String(lNum * rNum);
-      case '/': 
-        if (rNum === 0) throw new Error('division by zero');
-        return String(Math.trunc(lNum / rNum));
-      case '%': 
-        if (rNum === 0) throw new Error('division by zero');
-        return String(lNum % rNum);
-      case ':':
-        const res = String(left).match(new RegExp('^' + right));
-        return res ? String(res[0].length) : '0';
-      case '=':  return (bothNumeric ? lNum === rNum : left === right) ? '1' : '0';
-      case '!=': return (bothNumeric ? lNum !== rNum : left !== right) ? '1' : '0';
-      case '>':  return (bothNumeric ? lNum > rNum : left > right) ? '1' : '0';
-      case '<':  return (bothNumeric ? lNum < rNum : left < right) ? '1' : '0';
-      case '>=': return (bothNumeric ? lNum >= rNum : left >= right) ? '1' : '0';
-      case '<=': return (bothNumeric ? lNum <= rNum : left <= right) ? '1' : '0';
-    }
-  };
-
-  for (let i = 0; i < args.length; i++) {
-    const token = args[i];
-
-    // Strict check for null/undefined as per your tests
-    if (token === null || token === undefined) throw new Error('Invalid token');
-
-    if (token === '(') {
-      operators.push(token);
-    } else if (token === ')') {
-      while (operators.length > 0 && operators[operators.length - 1] !== '(') {
-        values.push(applyOp());
-      }
-      operators.pop();
-    } else if (precedence[token]) {
-      while (operators.length > 0 && 
-             operators[operators.length - 1] !== '(' && 
-             precedence[operators[operators.length - 1]] >= precedence[token]) {
-        values.push(applyOp());
-      }
-      operators.push(token);
-    } else if (token === 'length') {
-      const next = args[++i];
-      if (next === undefined) throw new Error('syntax error');
-      values.push(String(next.length));
-    } else if (token === 'substr') {
-      const str = values.pop();
-      const pos = parseInt(args[++i], 10);
-      const len = parseInt(args[++i], 10);
-      // POSIX substr is 1-indexed
-      const start = Math.max(0, pos - 1);
-      values.push(str.substr(start, len));
-    } else if (token === 'index') {
-      const str = values.pop();
-      const chars = args[++i];
-      let firstPos = 0;
-      for (let j = 0; j < str.length; j++) {
-        if (chars.includes(str[j])) {
-          firstPos = j + 1;
-          break;
-        }
-      }
-      values.push(String(firstPos));
-    } else {
-      // Validate that if it's not a known keyword/operator, 
-      // we aren't accepting random symbols like '@'
-      if (['@', '#', '$'].includes(token)) throw new Error('syntax error');
-      values.push(token);
-    }
-  }
-
-  while (operators.length > 0) {
-    if (operators[operators.length - 1] === '(') throw new Error('syntax error');
-    values.push(applyOp());
-  }
-
-  return values[0];
-}
-function applyBinaryOp(left, op, right) {
-  // 1. Try numeric conversion
-  const lNum = Number(left);
-  const rNum = Number(right);
-  const isNumeric = !isNaN(lNum) && !isNaN(rNum) && left !== '' && right !== '';
-
-  // Logical | (OR)
-  if (op === '|') {
-    return (left !== '0' && left !== '') ? left : right;
-  }
-  
-  // Logical & (AND)
-  if (op === '&') {
-    return (left !== '0' && left !== '' && right !== '0' && right !== '') ? left : '0';
-  }
-
-  // Comparisons
-  if (['=', '>', '<', '>=', '<=', '!='].includes(op)) {
-    let result;
-    if (isNumeric) {
-      if (op === '=') result = lNum === rNum;
-      if (op === '>') result = lNum > rNum;
-      if (op === '<') result = lNum < rNum;
-      if (op === '>=') result = lNum >= rNum;
-      if (op === '<=') result = lNum <= rNum;
-      if (op === '!=') result = lNum !== rNum;
-    } else {
-      // POSIX: Lexicographical comparison for strings
-      if (op === '=') result = left === right;
-      if (op === '>') result = left > right;
-      if (op === '<') result = left < right;
-      if (op === '!=') result = left !== right;
-      // Note: >= and <= should also be string-based here
-    }
-    return result ? '1' : '0';
-  }
-
-  // Arithmetic (Must be numeric)
-  if (['+', '-', '*', '/', '%'].includes(op)) {
-    if (!isNumeric) throw new Error('non-integer argument');
-    if ((op === '/' || op === '%') && rNum === 0) throw new Error('division by zero');
-    
-    switch (op) {
-      case '+': return lNum + rNum;
-      case '-': return lNum - rNum;
-      case '*': return lNum * rNum;
-      case '/': return Math.floor(lNum / rNum); // POSIX uses integer division
-      case '%': return lNum % rNum;
-    }
-  }
-
-  // Regex Match
-  if (op === ':') {
-    const regex = new RegExp('^' + right);
-    const match = String(left).match(regex);
-    return match ? String(match[0].length) : '0';
-  }
-
-  throw new Error('syntax error');
-}
-
-function expr(args) {
-  try {
-    const result = exprCore(args);
-
-    const normalized = normalize(result);
-
-    // 🚨 CRITICAL: match expr exit semantics
-    const isFalse = normalized === '0' || normalized === '';
-
-    return {
-      success: !isFalse,   // <-- THIS FIX
-      data: normalized,
-      error: null,
-    };
-  } catch (err) {
-    return {
-      success: false,
-      data: null,
-      error: normalize(err?.message || String(err)),
-    };
+    console.error(`  ✗ ${tag}`);
+    console.error(`      port  : success=${port.success}  data=${JSON.stringify(port.data)}  error=${port.error}`);
+    console.error(`      system: success=${system.success}  data=${JSON.stringify(system.data)}  error=${system.error}`);
+    failed++;
   }
 }
-      
 
-describe('expr vs system expr (basic arithmetic)', () => {
-  it('1 + 1', async () => {
-    await expectSameExpr({ args: ['1', '+', '1'] });
-  });
+function section(name) {
+  console.log(`\n── ${name}`);
+}
 
-  it('10 - 3', async () => {
-    await expectSameExpr({ args: ['10', '-', '3'] });
-  });
+// ─────────────────────────────────────────────
+// Test suite
+// ─────────────────────────────────────────────
 
-  it('5 * 5', async () => {
-    await expectSameExpr({ args: ['5', '*', '5'] });
-  });
+section('Basic arithmetic');
+await expectSameExpr({ args: ['1', '+', '1'] });
+await expectSameExpr({ args: ['10', '-', '3'] });
+await expectSameExpr({ args: ['5', '*', '5'] });
+await expectSameExpr({ args: ['10', '/', '2'] });
+await expectSameExpr({ args: ['10', '%', '3'] });
+await expectSameExpr({ args: ['7', '/', '2'] });       // truncation toward zero
+await expectSameExpr({ args: ['-7', '/', '2'] });      // negative truncation
+await expectSameExpr({ args: ['-7', '%', '2'] });
 
-  it('10 / 2', async () => {
-    await expectSameExpr({ args: ['10', '/', '2'] });
-  });
+section('Operator precedence (left-to-right, no implicit math precedence)');
+// expr evaluates left-to-right within the same precedence tier
+await expectSameExpr({ args: ['2', '+', '3', '*', '4'] });   // (2+3)*4 = 20
+await expectSameExpr({ args: ['10', '-', '3', '-', '2'] });  // (10-3)-2 = 5
 
-  it('10 % 3', async () => {
-    await expectSameExpr({ args: ['10', '%', '3'] });
-  });
+section('Parentheses');
+await expectSameExpr({ args: ['\\(', '2', '+', '3', '\\)', '*', '4'] });
+await expectSameExpr({ args: ['\\(', '10', '-', '3', '\\)', '-', '2'] });
 
-  it('left-to-right evaluation', async () => {
-    await expectSameExpr({ args: ['1', '+', '1', '*', '2'] });
-  });
-});
+section('Comparisons — numeric');
+await expectSameExpr({ args: ['1', '=', '1'] });
+await expectSameExpr({ args: ['1', '=', '2'] });        // false → success:false
+await expectSameExpr({ args: ['1', '!=', '2'] });
+await expectSameExpr({ args: ['5', '>', '3'] });
+await expectSameExpr({ args: ['2', '<', '3'] });
+await expectSameExpr({ args: ['3', '>=', '3'] });
+await expectSameExpr({ args: ['3', '<=', '4'] });
+await expectSameExpr({ args: ['01', '=', '1'] });       // leading zero: both numeric → equal
 
-describe('comparisons and logic', () => {
-  it('1 = 1', async () => {
-    await expectSameExpr({ args: ['1', '=', '1'] });
-  });
+section('Comparisons — string');
+await expectSameExpr({ args: ['abc', '=', 'abc'] });
+await expectSameExpr({ args: ['abc', '=', 'def'] });
+await expectSameExpr({ args: ['abc', '!=', 'def'] });
+await expectSameExpr({ args: ['b', '>', 'a'] });
+await expectSameExpr({ args: ['a', '<', 'b'] });
 
-  it('1 = 2', async () => {
-    await expectSameExpr({ args: ['1', '=', '2'] });
-  });
+section('Logical operators');
+await expectSameExpr({ args: ['5', '&', '2'] });        // 5 (both truthy)
+await expectSameExpr({ args: ['0', '&', '2'] });        // 0 (left falsy)
+await expectSameExpr({ args: ['5', '&', '0'] });        // 0 (right falsy)
+await expectSameExpr({ args: ['0', '|', '2'] });        // 2
+await expectSameExpr({ args: ['1', '|', '2'] });        // 1
+await expectSameExpr({ args: ['0', '|', '0'] });        // 0 → success:false
+await expectSameExpr({ args: ['', '|', 'fallback'] });  // fallback
 
-  it('1 != 2', async () => {
-    await expectSameExpr({ args: ['1', '!=', '2'] });
-  });
+section('String functions — length');
+await expectSameExpr({ args: ['length', 'abc'] });
+await expectSameExpr({ args: ['length', ''] });         // 0 → success:false
+await expectSameExpr({ args: ['length', 'hello world'] });
 
-  it('5 > 3', async () => {
-    await expectSameExpr({ args: ['5', '>', '3'] });
-  });
+section('String functions — substr');
+await expectSameExpr({ args: ['substr', 'abcdef', '1', '3'] });   // abc
+await expectSameExpr({ args: ['substr', 'abcdef', '3', '2'] });   // cd
+await expectSameExpr({ args: ['substr', 'abcdef', '6', '1'] });   // f (last char)
+await expectSameExpr({ args: ['substr', 'abcdef', '1', '100'] }); // abcdef (clamp)
+await expectSameExpr({ args: ['substr', 'abcdef', '0', '3'] });   // pos<1 → treat as 1
 
-  it('2 < 3', async () => {
-    await expectSameExpr({ args: ['2', '<', '3'] });
-  });
+section('String functions — index');
+await expectSameExpr({ args: ['index', 'abcdef', 'c'] });   // 3
+await expectSameExpr({ args: ['index', 'abcdef', 'z'] });   // 0 → success:false
+await expectSameExpr({ args: ['index', 'abcdef', 'ae'] });  // 1 (first of a or e)
 
-  it('logical AND (&)', async () => {
-    await expectSameExpr({ args: ['5', '&', '2'] });
-  });
+section('Regex match operator (:)');
+await expectSameExpr({ args: ['hello', ':', 'h.*o'] });     // 5 (full match length)
+await expectSameExpr({ args: ['hello', ':', 'xyz'] });      // 0 → success:false
+await expectSameExpr({ args: ['abc123', ':', '[a-z]+'] });  // 3
+await expectSameExpr({ args: ['hello', ':', 'hel'] });      // 3
 
-  it('logical OR (|)', async () => {
-    await expectSameExpr({ args: ['0', '|', '2'] });
-  });
-});
+section('Exit semantics — false results must have success:false');
+await expectSameExpr({ args: ['0'] });                      // literal 0
+await expectSameExpr({ args: ['1', '=', '2'] });            // compare false
+await expectSameExpr({ args: ['length', ''] });             // 0
+await expectSameExpr({ args: ['0', '&', '1'] });
 
-describe('string functions', () => {
-  it('length', async () => {
-    await expectSameExpr({ args: ['length', 'abc'] });
-  });
+section('Error cases — must fail on both sides');
+await expectSameExpr({ args: ['10', '/', '0'] });
+await expectSameExpr({ args: ['10', '%', '0'] });
+await expectSameExpr({ args: ['a', '+', '1'] });
+await expectSameExpr({ args: ['1', '+', 'b'] });
 
-  it('length empty', async () => {
-    await expectSameExpr({ args: ['length', ''] });
-  });
+section('Edge cases');
+await expectSameExpr({ args: ['42'] });                     // single value
+await expectSameExpr({ args: ['', '=', ''] });              // empty string equality
+await expectSameExpr({ args: ['0', '|', '5'] });            // OR with falsy left
 
-  it('substr', async () => {
-    await expectSameExpr({ args: ['abcdef', 'substr', '1', '3'] });
-  });
-});
-
-
-
-
-describe('special tests', () => {
- it('division by zero fails', async () => {
-  await expectSameExpr({ args: ['10', '/', '0'] });
-});
-
-it('non-numeric addition', async () => {
-  await expectSameExpr({ args: ['a', '+', '1'] });
-});
-
-it('no precedence (left to right)', async () => {
-  await expectSameExpr({ args: ['2', '+', '3', '*', '4'] });
-});
-
- it('parentheses grouping', async () => {
-  await expectSameExpr({
-    args: ['\\(', '2', '+', '3', '\\)', '*', '4'],
-  });
-});
-
-it('regex match operator', async () => {
-  await expectSameExpr({
-    args: ['hello', ':', 'h.*o'],
-  });
-});
-  
-});
-
-
-
-/* test('expr 1 + 1 returns 2', () => {
-  expect(expr(['1', '+', '1'])).toBe('2');
-});
-test('expr 10 - 3 returns 7', () => {
-  expect(expr(['10', '-', '3'])).toBe('7');
-});
-test('expr 5 * 5 returns 25', () => {
-  expect(expr(['5', '*', '5'])).toBe('25');
-});
-test('expr 10 / 2 returns 5', () => {
-  expect(expr(['10', '/', '2'])).toBe('5');
-});
-test('expr 10 % 3 returns 1', () => {
-  expect(expr(['10', '%', '3'])).toBe('1');
-});
-test('expr 1 + 1 * 2 evaluates left to right returns 3', () => {
-  expect(expr(['1', '+', '1', '*', '2'])).toBe('3');
-});
-test('expr 1 = 1 returns 1', () => {
-  expect(expr(['1', '=', '1'])).toBe('1');
-});
-test('expr 1 = 2 returns 0', () => {
-  expect(expr(['1', '=', '2'])).toBe('0');
-});
-test('expr 1 != 2 returns 1', () => {
-  expect(expr(['1', '!=', '2'])).toBe('1');
-});
-test('expr 5 > 3 returns 1', () => {
-  expect(expr(['5', '>', '3'])).toBe('1');
-});
-test('expr 2 < 3 returns 1', () => {
-  expect(expr(['2', '<', '3'])).toBe('1');
-});
-test('expr 5 & 2 returns 5', () => {
-  expect(expr(['5', '&', '2'])).toBe('5');
-});
-test('expr 0 & 2 returns 0', () => {
-  expect(expr(['0', '&', '2'])).toBe('0');
-});
-test('expr 0 | 2 returns 2', () => {
-  expect(expr(['0', '|', '2'])).toBe('2');
-});
-test('expr 1 | 2 returns 1', () => {
-  expect(expr(['1', '|', '2'])).toBe('1');
-});
-test('expr length abc returns 3', () => {
-  expect(expr(['length', 'abc'])).toBe('3');
-});
-test('expr length empty string returns 0', () => {
-  expect(expr(['length', ''])).toBe('0');
-});
-test('expr substr abcdef 1 3 returns abc', () => {
-  expect(expr(['abcdef', 'substr', '1', '3'])).toBe('abc');
-});
-test('expr substr abcdef 0 2 returns ab (1-based index edge case)', () => {
-  expect(expr(['abcdef', 'substr', '0', '2'])).toBe('ab');
-});
-test('expr index abcdef b returns 2', () => {
-  expect(expr(['abcdef', 'index', 'b'])).toBe('2');
-});
-test('expr index abcdef z returns 0', () => {
-  expect(expr(['abcdef', 'index', 'z'])).toBe('0');
-});
-test('expr match abc a returns 1', () => {
-  expect(expr(['abc', ':', 'a'])).toBe('1');
-});
-test('expr match abc ab returns 2', () => {
-  expect(expr(['abc', ':', 'ab'])).toBe('2');
-});
-test('expr length null throws error', () => {
-  expect(() => expr([null])).toThrow();
-});
-test('expr length undefined throws error', () => {
-  expect(() => expr([undefined])).toThrow();
-});
-test('expr 10 / 0 throws on division by zero', () => {
-  expect(() => expr(['10', '/', '0'])).toThrow();
-});
-test('expr 1 + ab throws on non-numeric addition', () => {
-  expect(() => expr(['1', '+', 'ab'])).toThrow();
-});
-test('expr with empty arguments throws', () => {
-  expect(() => expr([])).toThrow();
-});
-test('expr empty string comparison returns 1', () => {
-  expect(expr(['', '=', ''])).toBe('1');
-});
-test('expr substr string 0 0 returns empty string', () => {
-  expect(expr(['hello', 'substr', '0', '0'])).toBe('');
-});
-test('expr index string empty set returns 0', () => {
-  expect(expr(['hello', 'index', ''])).toBe('0');
-});
-test('expr logical and 0 and 0 returns 0', () => {
-  expect(expr(['0', '&', '0'])).toBe('0');
-});
-test('expr logical or 0 and 0 returns 0', () => {
-  expect(expr(['0', '|', '0'])).toBe('0');
-});
-test('expr match with regex special characters returns correct length', () => {
-  expect(expr(['abc123', ':', '[a-z]+'])).toBe('3');
-});
-test('expr match with no match returns 0', () => {
-  expect(expr(['abc', ':', 'xyz'])).toBe('0');
-});
-test('expr invalid operator throws', () => {
-  expect(() => expr(['1', '@', '2'])).toThrow();
-});
-*/
+// ─────────────────────────────────────────────
+// Summary
+// ─────────────────────────────────────────────
+console.log(`\n${'─'.repeat(40)}`);
+console.log(`Results: ${passed} passed, ${failed} failed`);
+if (failed > 0) process.exit(1);
