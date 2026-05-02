@@ -49,7 +49,8 @@ export function exprEval(args) {
 
   function parseOr() {
     let left = parseAnd();
-    while (peek() === '|') { next(); const r = parseAnd(); left = isTruthy(left) ? left : r; }
+    // GNU expr: | returns '0' rather than '' when falling through to an empty right operand
+    while (peek() === '|') { next(); const r = parseAnd(); left = isTruthy(left) ? left : (r === '' ? '0' : r); }
     return left;
   }
 
@@ -88,17 +89,41 @@ export function exprEval(args) {
     return left;
   }
 
+  // Translate BRE pattern to JS regex:
+  //   \( \) → capture groups ( )
+  //   \+ \? \{ \} \| → quantifiers/alternation
+  //   bare ( ) → escaped literals \( \)
+  function breToJs(pat) {
+    let out = '', i = 0;
+    while (i < pat.length) {
+      if (pat[i] === '\\' && i + 1 < pat.length) {
+        const n = pat[i + 1];
+        const special = { '(': '(', ')': ')', '+': '+', '?': '?', '{': '{', '}': '}', '|': '|' };
+        out += n in special ? special[n] : ('\\' + n);
+        i += 2;
+      } else if (pat[i] === '(' || pat[i] === ')') {
+        out += '\\' + pat[i++]; // literal paren in BRE → escape for JS
+      } else {
+        out += pat[i++];
+      }
+    }
+    return out;
+  }
+
   function parseMatch() {
     let left = parsePrimary();
     while (peek() === ':') {
       next();
       const pattern = next();
       if (pattern === undefined) throw new Error('syntax error');
+      // POSIX: no match returns '' if pattern has \(...\), else '0'
+      const hasCaptureGroup = /\\\(/.test(pattern);
       let re;
-      try { re = new RegExp('^(?:' + pattern + ')'); } catch { throw new Error('invalid regex'); }
+      try { re = new RegExp('^' + breToJs(pattern)); } catch { throw new Error('invalid regex'); }
       const m = String(left).match(re);
-      // If pattern has a capture group return captured text, else match length
-      left = !m ? '0' : m[1] !== undefined ? m[1] : String(m[0].length);
+      if (!m)              left = hasCaptureGroup ? '' : '0';
+      else if (m[1] !== undefined) left = m[1];
+      else                left = String(m[0].length);
     }
     return left;
   }
