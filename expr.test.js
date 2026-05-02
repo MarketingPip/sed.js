@@ -29,7 +29,8 @@ export function exprEval(args) {
 
   const isInt    = (s) => /^-?\d+$/.test(String(s));
   const toInt    = (s) => { if (!isInt(s)) throw new Error('non-integer argument'); return parseInt(s, 10); };
-  const isTruthy = (v) => v !== '0' && v !== '';
+  // GNU expr: integer values are falsy if numerically zero ("00", "-0" etc. are falsy)
+  const isTruthy = (v) => isInt(v) ? parseInt(v, 10) !== 0 : v !== '';
 
   const cmp = (op, l, r) => {
     const numeric = isInt(l) && isInt(r);
@@ -132,10 +133,10 @@ export function exprEval(args) {
     const tok = next();
     if (tok === undefined) throw new Error('syntax error');
 
-    if (tok === '(' || tok === '\\(') {
+    if (tok === '(') {
       const val = parseExpr();
       const close = next();
-      if (close !== ')' && close !== '\\)') throw new Error('syntax error');
+      if (close !== ')') throw new Error('syntax error');
       return val;
     }
 
@@ -311,6 +312,214 @@ describe('error cases', () => {
   it('non-numeric right',    async () => expectSameExpr({ args: ['1', '+', 'b'] }));
 });
 
+describe('POSIX parentheses (escaped)', () => {
+  it('\\( 2 + 3 \\) * 4', async () =>
+    expectSameExpr({ args: ['\\(', '2', '+', '3', '\\)', '*', '4'] })
+  );
+});
+
+describe('numeric vs string boundary', () => {
+  it('01 = 001 (numeric)', async () =>
+    expectSameExpr({ args: ['01', '=', '001'] })
+  );
+  it('01 = 1a (string compare)', async () =>
+    expectSameExpr({ args: ['01', '=', '1a'] })
+  );
+});
+
+describe('regex BRE edge cases', () => {
+  it('dot matches any char', async () =>
+    expectSameExpr({ args: ['abc', ':', 'a.c'] })
+  );
+  it('anchor start ^', async () =>
+    expectSameExpr({ args: ['abc', ':', '^a'] })
+  );
+  it('anchor end 
+  it('single value',         async () => expectSameExpr({ args: ['42'] }));
+  it('"" = ""',              async () => expectSameExpr({ args: ['', '=', ''] }));
+  it('0 | 5 = 5',           async () => expectSameExpr({ args: ['0', '|', '5'] }));
+  it('negative literal -1',  async () => expectSameExpr({ args: ['-1'] }));
+  it('-1 + 1 = 0 (false)',   async () => expectSameExpr({ args: ['-1', '+', '1'] }));
+});
+
+describe('chained operations', () => {
+  it('1 + 2 + 3 = 6',        async () => expectSameExpr({ args: ['1', '+', '2', '+', '3'] }));
+  it('10 - 3 - 2 - 1 = 4',   async () => expectSameExpr({ args: ['10', '-', '3', '-', '2', '-', '1'] }));
+  it('2 * 3 + 4 = 10',       async () => expectSameExpr({ args: ['2', '*', '3', '+', '4'] }));
+  it('1 + 2 = 3 (mixed arith+cmp)', async () => expectSameExpr({ args: ['1', '+', '2', '=', '3'] }));
+});
+
+describe('nested parentheses', () => {
+  it('((2 + 3)) * 4 = 20',   async () => expectSameExpr({ args: ['(', '(', '2', '+', '3', ')', ')', '*', '4'] }));
+  it('(2 + (3 * 4)) = 14',   async () => expectSameExpr({ args: ['(', '2', '+', '(', '3', '*', '4', ')', ')'] }));
+});
+
+describe('logical operators — empty string', () => {
+  it('"" & "x" = 0',         async () => expectSameExpr({ args: ['', '&', 'x'] }));
+  it('"x" & "" = 0',         async () => expectSameExpr({ args: ['x', '&', ''] }));
+  it('"" | "" = ""  (false)', async () => expectSameExpr({ args: ['', '|', ''] }));
+  it('"" | "x" = x',         async () => expectSameExpr({ args: ['', '|', 'x'] }));
+});
+
+describe('regex match operator (:) — capture groups', () => {
+  // POSIX: \( \) capture group → return captured text, not length
+  it('capture group returns text',         async () => expectSameExpr({ args: ['foobar', ':', '\\(foo\\)'] }));
+  it('capture group no match returns ""',  async () => expectSameExpr({ args: ['foobar', ':', '\\(baz\\)'] }));
+  it('partial capture',                    async () => expectSameExpr({ args: ['abc123', ':', '[a-z]*\\([0-9]*\\)'] }));
+});
+
+describe('BRE quantifiers in : operator', () => {
+  // \+ = one-or-more, \? = zero-or-one — translated by breToJs
+  it('\\+ one-or-more matches',       async () => expectSameExpr({ args: ['aaa', ':', 'a\\+'] }));
+  it('\\+ one-or-more no match → 0', async () => expectSameExpr({ args: ['bbb', ':', 'a\\+'] }));
+  it('\\? zero-or-one present',       async () => expectSameExpr({ args: ['ab',  ':', 'a\\?b'] }));
+  it('\\? zero-or-one absent',        async () => expectSameExpr({ args: ['b',   ':', 'a\\?b'] }));
+  it('capture with \\+',              async () => expectSameExpr({ args: ['aaa', ':', '\\(a\\+\\)'] }));
+});
+
+describe('chained : operators (left-to-right)', () => {
+  // Each : feeds its result as the new left operand
+  it('length via chained :',   async () => expectSameExpr({ args: ['foobar', ':', 'foo\\(.*\\)', ':', '.*'] }));
+  it('chain no match → 0',     async () => expectSameExpr({ args: ['foobar', ':', 'xyz', ':', '[0-9]*'] }));
+});
+
+describe('negative number comparisons', () => {
+  it('-1 < 0',   async () => expectSameExpr({ args: ['-1', '<', '0'] }));
+  it('-2 > -5',  async () => expectSameExpr({ args: ['-2', '>', '-5'] }));
+  it('-1 = -1',  async () => expectSameExpr({ args: ['-1', '=', '-1'] }));
+  it('-1 + -1 = -2', async () => expectSameExpr({ args: ['-1', '+', '-1', '=', '-2'] }));
+});
+
+describe('non-integer string comparisons', () => {
+  // 1.5 is not an integer so comparison must be lexicographic
+  it('1.5 = 1.5 (string)',  async () => expectSameExpr({ args: ['1.5', '=', '1.5'] }));
+  it('1.5 > 1.4 (string)',  async () => expectSameExpr({ args: ['1.5', '>', '1.4'] }));
+  it('+1 = 1 (string, not numeric)', async () => expectSameExpr({ args: ['+1', '=', '1'] }));
+});
+
+describe('string functions — length on various inputs', () => {
+  it('length of numeric string', async () => expectSameExpr({ args: ['length', '123'] }));
+  it('length of single char',    async () => expectSameExpr({ args: ['length', 'x'] }));
+  it('length with spaces',       async () => expectSameExpr({ args: ['length', 'hello world'] }));
+});
+
+describe('string functions — index first-occurrence', () => {
+  it('first of multiple matching chars', async () => expectSameExpr({ args: ['index', 'abcabc', 'ca'] }));
+  it('char at position 1',               async () => expectSameExpr({ args: ['index', 'xyz', 'x'] }));
+  it('all chars match, returns 1',       async () => expectSameExpr({ args: ['index', 'aaa', 'a'] }));
+});
+
+describe('string functions — substr boundaries', () => {
+  it('pos beyond length returns ""',  async () => expectSameExpr({ args: ['substr', 'abc', '99', '3'] }));
+  it('len = 0 returns ""',            async () => expectSameExpr({ args: ['substr', 'abc', '1', '0'] }));
+  it('negative len returns ""',       async () => expectSameExpr({ args: ['substr', 'abc', '1', '-1'] }));
+});
+, async () =>
+    expectSameExpr({ args: ['abc', ':', 'c
+  it('single value',         async () => expectSameExpr({ args: ['42'] }));
+  it('"" = ""',              async () => expectSameExpr({ args: ['', '=', ''] }));
+  it('0 | 5 = 5',           async () => expectSameExpr({ args: ['0', '|', '5'] }));
+  it('negative literal -1',  async () => expectSameExpr({ args: ['-1'] }));
+  it('-1 + 1 = 0 (false)',   async () => expectSameExpr({ args: ['-1', '+', '1'] }));
+});
+
+describe('chained operations', () => {
+  it('1 + 2 + 3 = 6',        async () => expectSameExpr({ args: ['1', '+', '2', '+', '3'] }));
+  it('10 - 3 - 2 - 1 = 4',   async () => expectSameExpr({ args: ['10', '-', '3', '-', '2', '-', '1'] }));
+  it('2 * 3 + 4 = 10',       async () => expectSameExpr({ args: ['2', '*', '3', '+', '4'] }));
+  it('1 + 2 = 3 (mixed arith+cmp)', async () => expectSameExpr({ args: ['1', '+', '2', '=', '3'] }));
+});
+
+describe('nested parentheses', () => {
+  it('((2 + 3)) * 4 = 20',   async () => expectSameExpr({ args: ['(', '(', '2', '+', '3', ')', ')', '*', '4'] }));
+  it('(2 + (3 * 4)) = 14',   async () => expectSameExpr({ args: ['(', '2', '+', '(', '3', '*', '4', ')', ')'] }));
+});
+
+describe('logical operators — empty string', () => {
+  it('"" & "x" = 0',         async () => expectSameExpr({ args: ['', '&', 'x'] }));
+  it('"x" & "" = 0',         async () => expectSameExpr({ args: ['x', '&', ''] }));
+  it('"" | "" = ""  (false)', async () => expectSameExpr({ args: ['', '|', ''] }));
+  it('"" | "x" = x',         async () => expectSameExpr({ args: ['', '|', 'x'] }));
+});
+
+describe('regex match operator (:) — capture groups', () => {
+  // POSIX: \( \) capture group → return captured text, not length
+  it('capture group returns text',         async () => expectSameExpr({ args: ['foobar', ':', '\\(foo\\)'] }));
+  it('capture group no match returns ""',  async () => expectSameExpr({ args: ['foobar', ':', '\\(baz\\)'] }));
+  it('partial capture',                    async () => expectSameExpr({ args: ['abc123', ':', '[a-z]*\\([0-9]*\\)'] }));
+});
+
+describe('BRE quantifiers in : operator', () => {
+  // \+ = one-or-more, \? = zero-or-one — translated by breToJs
+  it('\\+ one-or-more matches',       async () => expectSameExpr({ args: ['aaa', ':', 'a\\+'] }));
+  it('\\+ one-or-more no match → 0', async () => expectSameExpr({ args: ['bbb', ':', 'a\\+'] }));
+  it('\\? zero-or-one present',       async () => expectSameExpr({ args: ['ab',  ':', 'a\\?b'] }));
+  it('\\? zero-or-one absent',        async () => expectSameExpr({ args: ['b',   ':', 'a\\?b'] }));
+  it('capture with \\+',              async () => expectSameExpr({ args: ['aaa', ':', '\\(a\\+\\)'] }));
+});
+
+describe('chained : operators (left-to-right)', () => {
+  // Each : feeds its result as the new left operand
+  it('length via chained :',   async () => expectSameExpr({ args: ['foobar', ':', 'foo\\(.*\\)', ':', '.*'] }));
+  it('chain no match → 0',     async () => expectSameExpr({ args: ['foobar', ':', 'xyz', ':', '[0-9]*'] }));
+});
+
+describe('negative number comparisons', () => {
+  it('-1 < 0',   async () => expectSameExpr({ args: ['-1', '<', '0'] }));
+  it('-2 > -5',  async () => expectSameExpr({ args: ['-2', '>', '-5'] }));
+  it('-1 = -1',  async () => expectSameExpr({ args: ['-1', '=', '-1'] }));
+  it('-1 + -1 = -2', async () => expectSameExpr({ args: ['-1', '+', '-1', '=', '-2'] }));
+});
+
+describe('non-integer string comparisons', () => {
+  // 1.5 is not an integer so comparison must be lexicographic
+  it('1.5 = 1.5 (string)',  async () => expectSameExpr({ args: ['1.5', '=', '1.5'] }));
+  it('1.5 > 1.4 (string)',  async () => expectSameExpr({ args: ['1.5', '>', '1.4'] }));
+  it('+1 = 1 (string, not numeric)', async () => expectSameExpr({ args: ['+1', '=', '1'] }));
+});
+
+describe('string functions — length on various inputs', () => {
+  it('length of numeric string', async () => expectSameExpr({ args: ['length', '123'] }));
+  it('length of single char',    async () => expectSameExpr({ args: ['length', 'x'] }));
+  it('length with spaces',       async () => expectSameExpr({ args: ['length', 'hello world'] }));
+});
+
+describe('string functions — index first-occurrence', () => {
+  it('first of multiple matching chars', async () => expectSameExpr({ args: ['index', 'abcabc', 'ca'] }));
+  it('char at position 1',               async () => expectSameExpr({ args: ['index', 'xyz', 'x'] }));
+  it('all chars match, returns 1',       async () => expectSameExpr({ args: ['index', 'aaa', 'a'] }));
+});
+
+describe('string functions — substr boundaries', () => {
+  it('pos beyond length returns ""',  async () => expectSameExpr({ args: ['substr', 'abc', '99', '3'] }));
+  it('len = 0 returns ""',            async () => expectSameExpr({ args: ['substr', 'abc', '1', '0'] }));
+  it('negative len returns ""',       async () => expectSameExpr({ args: ['substr', 'abc', '1', '-1'] }));
+});
+] })
+  );
+  it('empty regex', async () =>
+    expectSameExpr({ args: ['abc', ':', ''] })
+  );
+});
+
+describe('syntax errors', () => {
+  it('missing operand', async () =>
+    expectSameExpr({ args: ['1', '+'] })
+  );
+  it('missing operator', async () =>
+    expectSameExpr({ args: ['1', '2'] })
+  );
+  it('unbalanced parentheses', async () =>
+    expectSameExpr({ args: ['\\(', '1', '+', '2'] })
+  );
+});
+
+describe('truthiness edge cases', () => {
+  it('"00" is truthy', async () =>
+    expectSameExpr({ args: ['00', '|', '5'] })
+  );
+});
+
 describe('edge cases', () => {
   it('single value',         async () => expectSameExpr({ args: ['42'] }));
   it('"" = ""',              async () => expectSameExpr({ args: ['', '=', ''] }));
@@ -391,66 +600,3 @@ describe('string functions — substr boundaries', () => {
   it('len = 0 returns ""',            async () => expectSameExpr({ args: ['substr', 'abc', '1', '0'] }));
   it('negative len returns ""',       async () => expectSameExpr({ args: ['substr', 'abc', '1', '-1'] }));
 });
-
-
-
-// chatgpt tests 
-describe('POSIX parentheses (escaped)', () => {
-  it('\\( 2 + 3 \\) * 4', async () =>
-    expectSameExpr({ args: ['\\(', '2', '+', '3', '\\)', '*', '4'] })
-  );
-});
-
-describe('numeric vs string boundary', () => {
-  it('01 = 001 (numeric)', async () =>
-    expectSameExpr({ args: ['01', '=', '001'] })
-  );
-
-  it('01 = 1a (string compare)', async () =>
-    expectSameExpr({ args: ['01', '=', '1a'] })
-  );
-});
-
-
-describe('regex BRE edge cases', () => {
-  it('dot matches any char', async () =>
-    expectSameExpr({ args: ['abc', ':', 'a.c'] })
-  );
-
-  it('anchor start ^', async () =>
-    expectSameExpr({ args: ['abc', ':', '^a'] })
-  );
-
-  it('anchor end $', async () =>
-    expectSameExpr({ args: ['abc', ':', 'c$'] })
-  );
-
- it('empty regex', async () =>
-  expectSameExpr({ args: ['abc', ':', ''] })
-); 
-});
-
-
-describe('syntax errors', () => {
-  it('missing operand', async () =>
-    expectSameExpr({ args: ['1', '+'] })
-  );
-
-  it('missing operator', async () =>
-    expectSameExpr({ args: ['1', '2'] })
-  );
-
-  it('unbalanced parentheses', async () =>
-    expectSameExpr({ args: ['\\(', '1', '+', '2'] })
-  );
-});
-
-
-describe('truthiness edge cases', () => {
-  it('"00" is truthy', async () =>
-    expectSameExpr({ args: ['00', '|', '5'] })
-  );
-});
-
-
-
