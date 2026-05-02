@@ -176,6 +176,16 @@ describe('Sed.js FULL Test Suite', () => {
       });
     });
 
+
+  it('handles N command (multiline pattern space)', async () => {
+    await expectSameSedOutput({
+      portCommand: 'N;s/\\n/ /',
+      systemArgs: ['N;s/\\n/ /'],
+      stdin: 'hello\nworld',
+    });
+  });
+
+    
     it('global replacement', async () => {
       await expectSameSedOutput({
         portCommand: 's/apple/orange/g',
