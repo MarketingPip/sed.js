@@ -246,7 +246,7 @@ function applyBinaryOp(left, op, right) {
   throw new Error('syntax error');
 }
 
-async function expr(args) {
+function expr(args) {
   try {
     const result = exprCore(args);
 
