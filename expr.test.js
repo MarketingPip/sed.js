@@ -107,9 +107,10 @@ export function exprEval(args) {
     const tok = next();
     if (tok === undefined) throw new Error('syntax error');
 
-    if (tok === '\\(') {
+    if (tok === '(' || tok === '\\(') {
       const val = parseExpr();
-      if (next() !== '\\)') throw new Error('syntax error');
+      const close = next();
+      if (close !== ')' && close !== '\\)') throw new Error('syntax error');
       return val;
     }
 
@@ -181,8 +182,12 @@ async function expectSameExpr({ args }) {
   expect(port.success).toBe(system.success);
   if (system.success) {
     expect(port.data).toBe(system.data);
-  } else {
+  } else if (system.error) {
+    // Real error (non-zero stderr): port must also have produced an error
     expect(port.error?.length).toBeGreaterThan(0);
+  } else {
+    // False result (exit 1, no stderr): port must return the same falsy data
+    expect(port.data).toBe(system.data);
   }
 }
 
@@ -203,8 +208,8 @@ describe('operator precedence (left-to-right within tier)', () => {
 });
 
 describe('parentheses', () => {
-  it('(2 + 3) * 4',  async () => expectSameExpr({ args: ['\\(', '2', '+', '3', '\\)', '*', '4'] }));
-  it('(10 - 3) - 2', async () => expectSameExpr({ args: ['\\(', '10', '-', '3', '\\)', '-', '2'] }));
+  it('(2 + 3) * 4',  async () => expectSameExpr({ args: ['(', '2', '+', '3', ')', '*', '4'] }));
+  it('(10 - 3) - 2', async () => expectSameExpr({ args: ['(', '10', '-', '3', ')', '-', '2'] }));
 });
 
 describe('comparisons — numeric', () => {
