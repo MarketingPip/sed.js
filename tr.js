@@ -420,3 +420,252 @@ function tr(argvOrString, input = "") {
 
   return new TextDecoder().decode(new Uint8Array(outputBytes));
 }
+
+
+import tr from "./tr";
+
+describe("tr() core functionality", () => {
+
+  // -------------------------
+  // 1. BASIC TRANSLATION
+  // -------------------------
+  test("translate simple range", () => {
+    expect(tr(["a-c", "x-z"], "abc")).toBe("xyz");
+  });
+
+  test("translate with extra chars untouched", () => {
+    expect(tr(["a-c", "x-z"], "abcde")).toBe("xyzde");
+  });
+
+  test("translate single char", () => {
+    expect(tr(["a", "b"], "a")).toBe("b");
+  });
+
+  test("translate multiple occurrences", () => {
+    expect(tr(["a", "b"], "banana")).toBe("bbnbnb");
+  });
+
+  test("translate identity", () => {
+    expect(tr(["a", "a"], "aaa")).toBe("aaa");
+  });
+
+  // -------------------------
+  // 2. RANGE + PADDING
+  // -------------------------
+  test("set2 padding repeats last char", () => {
+    expect(tr(["a-c", "X"], "abc")).toBe("XXX");
+  });
+
+  test("range extension behavior", () => {
+    expect(tr(["a-c", "x-y"], "abc")).toBe("xyz");
+  });
+
+  test("longer set1 than set2", () => {
+    expect(tr(["a-e", "12"], "abcde")).toBe("12222");
+  });
+
+  // -------------------------
+  // 3. DELETE MODE
+  // -------------------------
+  test("delete single char", () => {
+    expect(tr(["-d", "a"], "banana")).toBe("bnn");
+  });
+
+  test("delete range", () => {
+    expect(tr(["-d", "a-c"], "abcdef")).toBe("def");
+  });
+
+  test("delete nothing if not present", () => {
+    expect(tr(["-d", "x"], "abc")).toBe("abc");
+  });
+
+  test("delete all characters", () => {
+    expect(tr(["-d", "a-z"], "abc")).toBe("");
+  });
+
+  // -------------------------
+  // 4. SQUEEZE MODE
+  // -------------------------
+  test("squeeze repeated chars", () => {
+    expect(tr(["-s", "a"], "aaabaaa")).toBe("aba");
+  });
+
+  test("squeeze different char unaffected", () => {
+    expect(tr(["-s", "a"], "bbb")).toBe("bbb");
+  });
+
+  test("squeeze multiple runs", () => {
+    expect(tr(["-s", "a"], "aaabaa")).toBe("aba");
+  });
+
+  test("squeeze mixed chars", () => {
+    expect(tr(["-s", "ab"], "aaabbb")).toBe("ab");
+  });
+
+  // -------------------------
+  // 5. DELETE + SQUEEZE
+  // -------------------------
+  test("delete then squeeze", () => {
+    expect(tr(["-ds", "ab"], "aaabbbccc")).toBe("ccc");
+  });
+
+  test("delete before squeeze order", () => {
+    expect(tr(["-ds", "a"], "aaabaaa")).toBe("b");
+  });
+
+  test("squeeze uses delete set if omitted", () => {
+    expect(tr(["-ds", "a"], "aaabaaa")).toBe("b");
+  });
+
+  // -------------------------
+  // 6. COMPLEMENT
+  // -------------------------
+  test("complement basic", () => {
+    expect(tr(["-c", "a"], "abc")).toBe("aaa");
+  });
+
+  test("complement delete", () => {
+    expect(tr(["-cd", "a"], "abc")).toBe("a");
+  });
+
+  test("complement squeeze", () => {
+    expect(tr(["-cs", "a"], "bbbccc")).toBe("b");
+  });
+
+  test("complement full set", () => {
+    expect(tr(["-c", "a-z"], "ABC")).toBe("aaa");
+  });
+
+  // -------------------------
+  // 7. CHARACTER CLASSES
+  // -------------------------
+  test("lower to upper", () => {
+    expect(tr(["[:lower:]", "[:upper:]"], "hello")).toBe("HELLO");
+  });
+
+  test("delete digits", () => {
+    expect(tr(["-d", "[:digit:]"], "a1b2c3")).toBe("abc");
+  });
+
+  test("space class", () => {
+    expect(tr(["-d", "[:space:]"], "a b\tc\n")).toBe("abc");
+  });
+
+  test("punct class", () => {
+    expect(tr(["-d", "[:punct:]"], "a!b@c")).toBe("abc");
+  });
+
+  // -------------------------
+  // 8. ESCAPE SEQUENCES
+  // -------------------------
+  test("tab escape", () => {
+    expect(tr(["\\t", "_"], "a\tb")).toBe("a_b");
+  });
+
+  test("newline escape", () => {
+    expect(tr(["\\n", "_"], "a\nb")).toBe("a_b");
+  });
+
+  test("backslash escape", () => {
+    expect(tr(["\\\\", "_"], "a\\b")).toBe("a_b");
+  });
+
+  test("octal escape", () => {
+    expect(tr(["\\141", "x"], "a")).toBe("x");
+  });
+
+  // -------------------------
+  // 9. REPEAT SYNTAX
+  // -------------------------
+  test("repeat fixed count", () => {
+    expect(tr(["a", "[b*3]"], "aaaa")).toBe("bbbb");
+  });
+
+  test("repeat infinite (set2)", () => {
+    expect(tr(["a", "[b*]"], "aaaa")).toBe("bbbb");
+  });
+
+  test("repeat with escape char", () => {
+    expect(tr(["a", "[\\n*2]"], "aa")).toBe("\n\n");
+  });
+
+  // -------------------------
+  // 10. EQUIVALENCE CLASS
+  // -------------------------
+  test("equivalence class literal", () => {
+    expect(tr(["[=a=]", "b"], "a")).toBe("b");
+  });
+
+  // -------------------------
+  // 11. STRING ARG PARSING
+  // -------------------------
+  test("string argv form", () => {
+    expect(tr("-s a", "aaab")).toBe("ab");
+  });
+
+  test("string with multiple args", () => {
+    expect(tr("-d a", "banana")).toBe("bnn");
+  });
+
+  // -------------------------
+  // 12. EDGE CASES
+  // -------------------------
+  test("empty input", () => {
+    expect(tr(["a", "b"], "")).toBe("");
+  });
+
+  test("empty sets", () => {
+    expect(() => tr(["-d"], "abc")).toThrow();
+  });
+
+  test("invalid range", () => {
+    expect(() => tr(["z-a", "x"], "abc")).toThrow();
+  });
+
+  test("invalid class", () => {
+    expect(() => tr(["[:fake:]"], "abc")).toThrow();
+  });
+
+  test("invalid repeat syntax", () => {
+    expect(() => tr(["a", "[b**]"], "aaa")).toThrow();
+  });
+
+  test("missing SET2", () => {
+    expect(() => tr(["a"], "abc")).toThrow();
+  });
+
+  test("too many args", () => {
+    expect(() => tr(["a", "b", "c"], "abc")).toThrow();
+  });
+
+  // -------------------------
+  // 13. UINT8ARRAY SUPPORT
+  // -------------------------
+  test("Uint8Array input", () => {
+    const input = new TextEncoder().encode("abc");
+    const result = tr(["a", "x"], input);
+    expect(result).toBe("xbc");
+  });
+
+  // -------------------------
+  // 14. ORDER OF OPERATIONS
+  // -------------------------
+  test("delete before translate", () => {
+    expect(tr(["-d", "a", "a", "b"], "a")).toBe("");
+  });
+
+  test("translate before squeeze", () => {
+    expect(tr(["-s", "b", "a", "b"], "aa")).toBe("b");
+  });
+
+  // -------------------------
+  // 15. STRESS TEST
+  // -------------------------
+  test("large input deterministic", () => {
+    const input = "a".repeat(100000);
+    const out1 = tr(["a", "b"], input);
+    const out2 = tr(["a", "b"], input);
+    expect(out1).toBe(out2);
+  });
+
+});
