@@ -391,3 +391,66 @@ describe('string functions — substr boundaries', () => {
   it('len = 0 returns ""',            async () => expectSameExpr({ args: ['substr', 'abc', '1', '0'] }));
   it('negative len returns ""',       async () => expectSameExpr({ args: ['substr', 'abc', '1', '-1'] }));
 });
+
+
+
+// chatgpt tests 
+describe('POSIX parentheses (escaped)', () => {
+  it('\\( 2 + 3 \\) * 4', async () =>
+    expectSameExpr({ args: ['\\(', '2', '+', '3', '\\)', '*', '4'] })
+  );
+});
+
+describe('numeric vs string boundary', () => {
+  it('01 = 001 (numeric)', async () =>
+    expectSameExpr({ args: ['01', '=', '001'] })
+  );
+
+  it('01 = 1a (string compare)', async () =>
+    expectSameExpr({ args: ['01', '=', '1a'] })
+  );
+});
+
+
+describe('regex BRE edge cases', () => {
+  it('dot matches any char', async () =>
+    expectSameExpr({ args: ['abc', ':', 'a.c'] })
+  );
+
+  it('anchor start ^', async () =>
+    expectSameExpr({ args: ['abc', ':', '^a'] })
+  );
+
+  it('anchor end $', async () =>
+    expectSameExpr({ args: ['abc', ':', 'c$'] })
+  );
+
+ it('empty regex', async () =>
+  expectSameExpr({ args: ['abc', ':', ''] })
+); 
+});
+
+
+describe('syntax errors', () => {
+  it('missing operand', async () =>
+    expectSameExpr({ args: ['1', '+'] })
+  );
+
+  it('missing operator', async () =>
+    expectSameExpr({ args: ['1', '2'] })
+  );
+
+  it('unbalanced parentheses', async () =>
+    expectSameExpr({ args: ['\\(', '1', '+', '2'] })
+  );
+});
+
+
+describe('truthiness edge cases', () => {
+  it('"00" is truthy', async () =>
+    expectSameExpr({ args: ['00', '|', '5'] })
+  );
+});
+
+
+
