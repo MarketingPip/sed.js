@@ -124,7 +124,9 @@ export function exprEval(args) {
       const str = next(), rawPos = next(), rawLen = next();
       if (str === undefined || rawPos === undefined || rawLen === undefined) throw new Error('syntax error');
       const p = toInt(rawPos), l = toInt(rawLen);
-      return String(str).substr(Math.max(0, p - 1), Math.max(0, l));
+      // POSIX: pos < 1 yields empty string (no clamping to start of string)
+      if (p < 1) return '';
+      return String(str).substr(p - 1, Math.max(0, l));
     }
 
     if (tok === 'index') {
@@ -165,8 +167,10 @@ function runSystemExpr(args) {
   try {
     const r = spawnSync('expr', args, { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
     if (r.error) return { success: false, data: null, error: normalize(r.error.message) };
-    const ok = r.status === 0;
-    return { success: ok, data: ok ? normalize(r.stdout) : null, error: !ok ? normalize(r.stderr || r.stdout) : null };
+    // exit 0 = true result, exit 1 = false result (not an error), exit 2 = syntax/runtime error
+    if (r.status === 0) return { success: true,  data: normalize(r.stdout), error: null };
+    if (r.status === 1) return { success: false, data: normalize(r.stdout), error: null };
+    /* status >= 2  */  return { success: false, data: null, error: normalize(r.stderr || r.stdout) };
   } catch (err) {
     return { success: false, data: null, error: normalize(err?.message ?? String(err)) };
   }
@@ -264,7 +268,7 @@ describe('string functions — index', () => {
 describe('regex match operator (:)', () => {
   it('hello : h.*o = 5',         async () => expectSameExpr({ args: ['hello', ':', 'h.*o'] }));
   it('hello : xyz = 0 (false)',  async () => expectSameExpr({ args: ['hello', ':', 'xyz'] }));
-  it('abc123 : [a-z]+ = 3',     async () => expectSameExpr({ args: ['abc123', ':', '[a-z]+'] }));
+  it('abc123 : [a-z][a-z]* = 3', async () => expectSameExpr({ args: ['abc123', ':', '[a-z][a-z]*'] }));
   it('hello : hel = 3',          async () => expectSameExpr({ args: ['hello', ':', 'hel'] }));
 });
 
