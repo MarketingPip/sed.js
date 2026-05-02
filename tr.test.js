@@ -422,7 +422,6 @@ function tr(argvOrString, input = "") {
 }
 
 
-import tr from "./tr";
 
 describe("tr() core functionality", () => {
 
