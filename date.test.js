@@ -6,11 +6,11 @@ function date(argv, mockOptions = {}) {
     "date", "seconds", "ns",
   ];
   const time_spec_map = {
-    "date": 0, // TIME_SPEC_DATE (corresponds to index 2 in original time_spec array)
-    "seconds": 1, // TIME_SPEC_SECONDS (corresponds to index 3)
-    "ns": 2,      // TIME_SPEC_NS (corresponds to index 4)
-    "hours": 3,   // TIME_SPEC_HOURS (corresponds to index 0)
-    "minutes": 4  // TIME_SPEC_MINUTES (corresponds to index 1)
+    "date": 0,
+    "seconds": 1,
+    "ns": 2,
+    "hours": 3,
+    "minutes": 4
   };
 
   const rfc_email_format = "%a, %d %b %Y %H:%M:%S %z";
@@ -19,16 +19,18 @@ function date(argv, mockOptions = {}) {
   const RESOLUTION_OPTION = 'resolution';
   const RFC_3339_OPTION = 'rfc-3339';
 
+  // Short options map: char -> canonical key used in parsedOptions
   const short_options_map = {
-    'd': 'date',
-    'f': 'file',
-    'I': 'iso-8601',
-    'r': 'reference',
-    'R': 'rfc-email',
-    's': 'set',
-    'u': 'utc',
+    'd': 'd',
+    'f': 'f',
+    'I': 'I',
+    'r': 'r',
+    'R': 'R',
+    's': 's',
+    'u': 'u',
   };
 
+  // Long options map: long name -> canonical key used in parsedOptions
   const long_options_map = {
     'date': 'd',
     'debug': DEBUG_DATE_PARSING_OPTION,
@@ -55,7 +57,7 @@ function date(argv, mockOptions = {}) {
     if (message) {
       stderrFn(`${PROGRAM_NAME}: ${message}\n`);
     }
-    if (status !== 0) { // Equivalent to EXIT_FAILURE
+    if (status !== 0) {
       throw new Error(message || "Error");
     }
   }
@@ -81,8 +83,8 @@ function date(argv, mockOptions = {}) {
     }
     return true;
   };
-  const gettime_res = () => mockOptions.mockGetTimeResolution ? mockOptions.mockGetTimeResolution() : 1; // Default to nanosecond precision (1ns)
-
+  // Returns resolution in nanoseconds (1 = 1ns, 1000000 = 1ms)
+  const gettime_res = () => mockOptions.mockGetTimeResolution ? mockOptions.mockGetTimeResolution() : 1;
 
   // --- Argument Parsing ---
   function parseArgs(cliArgs) {
@@ -102,37 +104,38 @@ function date(argv, mockOptions = {}) {
           optionValue = arg.substring(eqIndex + 1);
         } else {
           optionName = arg.substring(2);
-          optionValue = true; // Flag without value means true
+          optionValue = true;
         }
 
-        const mappedOpt = long_options_map[optionName];
-        if (!mappedOpt) {
-          error(1, `unrecognized option '${arg}'`);
+        const canonicalKey = long_options_map[optionName];
+        if (!canonicalKey) {
+          error(1, `unknown option '${arg}'`);
         }
 
-        if (mappedOpt === 'I' || mappedOpt === RFC_3339_OPTION) {
-          parsedOptions[mappedOpt] = (optionValue === true) ? '' : optionValue;
+        if (canonicalKey === 'I' || canonicalKey === RFC_3339_OPTION) {
+          parsedOptions[canonicalKey] = (optionValue === true) ? '' : optionValue;
         } else {
-          parsedOptions[mappedOpt] = optionValue;
+          parsedOptions[canonicalKey] = optionValue;
         }
         i++;
       } else if (arg.startsWith('-') && arg.length > 1) {
-        const shortOpt = arg[1];
-        const mappedOpt = short_options_map[shortOpt];
+        const shortOptChar = arg[1];
+        const canonicalKey = short_options_map[shortOptChar];
 
-        if (!mappedOpt) {
-          error(1, `invalid option -- '${shortOpt}'`);
+        if (!canonicalKey) {
+          error(1, `invalid option -- '${shortOptChar}'`);
         }
 
         if (arg.length > 2) { // e.g., -Idate, -dSTRING
-          parsedOptions[mappedOpt] = arg.substring(2);
+          parsedOptions[canonicalKey] = arg.substring(2);
         } else {
-          if (requiresArg(shortOpt)) {
+          if (requiresArg(shortOptChar)) {
             i++;
-            if (i >= cliArgs.length) error(1, `option requires an argument -- '${shortOpt}'`);
-            parsedOptions[mappedOpt] = cliArgs[i];
-          } else { // -I, -R, -u
-            parsedOptions[mappedOpt] = (mappedOpt === 'I') ? '' : true; // -I without value maps to empty string, others to true
+            if (i >= cliArgs.length) error(1, `option requires an argument -- '${shortOptChar}'`);
+            parsedOptions[canonicalKey] = cliArgs[i];
+          } else {
+            // -I without value maps to empty string, others to true
+            parsedOptions[canonicalKey] = (canonicalKey === 'I') ? '' : true;
           }
         }
         i++;
@@ -146,7 +149,6 @@ function date(argv, mockOptions = {}) {
 
   // --- Timezone-aware Date Utilities ---
 
-  // Helper for padding
   const pad = (num, length, char = '0') => {
     let s = String(num);
     while (s.length < length) {
@@ -155,49 +157,39 @@ function date(argv, mockOptions = {}) {
     return s;
   };
 
-  // Parses a date string, which can be an absolute date or a relative date.
-  // Returns { date: Date, tz: string|null }
+  // Parses a date string (absolute or relative). Returns { date: Date, tz: string|null }
   function parseDatetime(dateStr, baseDate, defaultTzString) {
     let parsedDate = null;
     let explicitTz = null;
 
-    // 1. Try JavaScript's native Date parsing first
-    // This handles ISO, RFC, and many common formats, including embedded timezones.
+    // 1. Try JavaScript's native Date parsing
     const nativeParsed = new Date(dateStr);
     if (!isNaN(nativeParsed.getTime())) {
       parsedDate = nativeParsed;
-      // Try to extract an explicit TZ from the string (heuristic, not foolproof)
-      const tzMatch = dateStr.match(/\s([A-Z]{2,5}(?:[+-]\d{4})?|\w+\/[A-Z_]+)\s*$/i);
+      const tzMatch = dateStr.match(/\s([A-Z]{2,5}|[A-Z][a-z]+\/[A-Z_a-z]+|UTC[+-]\d+|[+-]\d{4})\s*$/i);
       if (tzMatch) {
         const matchedTz = tzMatch[1];
-        // Common abbreviations that Intl.DateTimeFormat understands
         if (['UTC', 'GMT', 'Z'].includes(matchedTz.toUpperCase())) explicitTz = 'UTC';
-        else if (matchedTz.match(/^[+-]\d{4}$/)) explicitTz = 'UTC' + matchedTz.replace('+', '-').replace(/(\d{2})(\d{2})/, '$1:$2'); // '+0400' -> 'UTC-04:00'
-        else explicitTz = matchedTz; // Assume it's a valid TZ identifier
+        else if (matchedTz.match(/^[+-]\d{4}$/)) explicitTz = null; // numeric offset, leave to JS
+        else explicitTz = matchedTz;
       }
     }
     if (parsedDate) return { date: parsedDate, tz: explicitTz };
 
-
-    // 2. Try relative date parsing (operates on components in `defaultTzString`)
-    // Create a date that, when using getUTC* methods, gives the local time components for defaultTzString
-    const d = new Date(baseDate.getTime()); 
-    
-    // Adjust baseDate to its interpretation in the target timezone for relative calculations
+    // 2. Try relative date parsing
     const effectiveBaseDate = createTzAwareDate(baseDate, defaultTzString);
     const relativeDate = new Date(effectiveBaseDate.getTime());
 
     const lowerDateStr = dateStr.toLowerCase();
 
-    // Helper for setting day of week (works on `relativeDate` which is tz-aware)
-    const setDayOfWeek = (targetDay, modifier) => { // targetDay: 0 (Sun) - 6 (Sat)
-      const currentDay = relativeDate.getUTCDay(); // Use UTC methods on tz-aware date
+    const setDayOfWeek = (targetDay, modifier) => {
+      const currentDay = relativeDate.getUTCDay();
       let daysDiff = targetDay - currentDay;
       if (modifier === 'next') {
         if (daysDiff <= 0) daysDiff += 7;
       } else if (modifier === 'last') {
         if (daysDiff >= 0) daysDiff -= 7;
-        relativeDate.setUTCHours(0, 0, 0, 0); // For 'last', reset to start of day in target TZ
+        relativeDate.setUTCHours(0, 0, 0, 0);
       }
       relativeDate.setUTCDate(relativeDate.getUTCDate() + daysDiff);
     };
@@ -222,18 +214,15 @@ function date(argv, mockOptions = {}) {
         return { date: relativeDate, tz: explicitTz };
       }
     }
-    
-    return { date: null, tz: null }; // Failed to parse
+
+    return { date: null, tz: null };
   }
 
-  // Parses MMDDhhmm[[CC]YY][.ss] format. Assumes input refers to *local* time in `targetTz`.
+  // Parses MMDDhhmm[[CC]YY][.ss] format
   function parsePosixDate(dateStr, baseDate, targetTz) {
     const regex = /^(\d{2})(\d{2})(\d{2})(\d{2})(?:(\d{2})(\d{2}))?(?:\.(\d{2}))?$/;
     const match = dateStr.match(regex);
-
-    if (!match) {
-      return null;
-    }
+    if (!match) return null;
 
     let [, month, day, hour, minute, cc, yy, ss] = match;
     month = parseInt(month, 10);
@@ -246,109 +235,90 @@ function date(argv, mockOptions = {}) {
     if (cc && yy) {
       year = parseInt(cc + yy, 10);
     } else if (yy) {
-      const currentYear = baseDate.getFullYear();
       year = parseInt(yy, 10);
-      if (year >= 69) {
-        year += 1900;
-      } else {
-        year += 2000;
-      }
+      year += (year >= 69) ? 1900 : 2000;
     } else {
       year = baseDate.getFullYear();
     }
-    
-    // Use Intl.DateTimeFormat to find the UTC equivalent of this local time in `targetTz`
-    const isoString = `${pad(year, 4)}-${pad(month, 2)}-${pad(day, 2)}T${pad(hour, 2)}:${pad(minute, 2)}:${pad(ss, 2)}`;
-    
-    // Create a Date object from this string, interpreting it in the target timezone.
-    // This is tricky as `new Date()` parses as local/UTC based on string format.
-    // The most reliable way is often to use the `Intl.DateTimeFormat` again to parse.
-    // For simplicity, if targetTz is UTC, interpret as UTC. Otherwise, assume local system interpretation
-    // and let `createTzAwareDate` align it later.
 
     if (targetTz === 'UTC' || targetTz === 'UTC0') {
       return new Date(Date.UTC(year, month - 1, day, hour, minute, ss, 0));
     } else {
-      // This will create a Date object where its components in the *system's local TZ* match the inputs.
-      // E.g., for "01011200", in New York, it's 12:00 NY time.
       return new Date(year, month - 1, day, hour, minute, ss, 0);
     }
   }
 
-  // Calculates the actual timezone offset in minutes for a given dateObj and tzString.
-  // Returns positive for UTC+ (East), negative for UTC- (West).
+  // Returns offset in minutes (positive = UTC+, negative = UTC-)
   function getTzOffsetMinutesAtDate(dateObj, tzString) {
-    if (tzString === 'UTC' || tzString === 'UTC0') return 0;
-    
-    // Use Intl.DateTimeFormat to get components of dateObj in targetTz
+    const tz = (tzString === 'UTC0') ? 'UTC' : tzString;
+    if (tz === 'UTC') return 0;
+
     const formatter = new Intl.DateTimeFormat('en-US', {
       year: 'numeric', month: '2-digit', day: '2-digit',
       hour: '2-digit', minute: '2-digit', second: '2-digit',
-      timeZone: tzString, hourCycle: 'h23'
+      timeZone: tz, hourCycle: 'h23'
     });
     const parts = formatter.formatToParts(dateObj);
 
-    const y = parseInt(parts.find(p => p.type === 'year')?.value, 10);
+    const y  = parseInt(parts.find(p => p.type === 'year')?.value, 10);
     const mo = parseInt(parts.find(p => p.type === 'month')?.value, 10);
-    const d = parseInt(parts.find(p => p.type === 'day')?.value, 10);
-    const h = parseInt(parts.find(p => p.type === 'hour')?.value, 10);
+    const d  = parseInt(parts.find(p => p.type === 'day')?.value, 10);
+    const h  = parseInt(parts.find(p => p.type === 'hour')?.value, 10);
     const mi = parseInt(parts.find(p => p.type === 'minute')?.value, 10);
-    const s = parseInt(parts.find(p => p.type === 'second')?.value, 10);
+    const s  = parseInt(parts.find(p => p.type === 'second')?.value, 10);
 
-    // Create a UTC date from these components. This represents the 'local time in targetTz' as a UTC timestamp.
     const dateInTargetTzAsUtc = new Date(Date.UTC(y, mo - 1, d, h, mi, s));
-    
-    // The difference between this UTC representation of the local time and the original dateObj's UTC time
-    // is the actual offset of the target timezone from UTC *at this specific date/time*.
-    // e.g., if dateObj is 10:00Z, and targetTz local is 06:00, then dateInTargetTzAsUtc is 06:00Z.
-    // offset = (06:00Z - 10:00Z) = -4 hours.
     return (dateInTargetTzAsUtc.getTime() - dateObj.getTime()) / (1000 * 60);
   }
 
-  // Formats the timezone offset string (+HHMM, +HH:MM, etc.)
   function formatTzOffset(offsetMinutes, format) {
     const sign = offsetMinutes >= 0 ? '+' : '-';
     const absOffsetMinutes = Math.abs(offsetMinutes);
     const hours = Math.floor(absOffsetMinutes / 60);
     const minutes = absOffsetMinutes % 60;
-    const seconds = 0; 
-
+    const seconds = 0;
     const pad2 = (n) => String(n).padStart(2, '0');
 
-    if (format === 'hhmm') {
-      return `${sign}${pad2(hours)}${pad2(minutes)}`;
-    } else if (format === 'hh:mm') {
-      return `${sign}${pad2(hours)}:${pad2(minutes)}`;
-    } else if (format === 'hh:mm:ss') {
+    if (format === 'hhmm')    return `${sign}${pad2(hours)}${pad2(minutes)}`;
+    if (format === 'hh:mm')   return `${sign}${pad2(hours)}:${pad2(minutes)}`;
+    if (format === 'hh:mm:ss') return `${sign}${pad2(hours)}:${pad2(minutes)}:${pad2(seconds)}`;
+    if (format === 'precision') {
+      if (minutes === 0 && seconds === 0) return `${sign}${pad2(hours)}`;
+      if (seconds === 0)                  return `${sign}${pad2(hours)}:${pad2(minutes)}`;
       return `${sign}${pad2(hours)}:${pad2(minutes)}:${pad2(seconds)}`;
-    } else if (format === 'precision') {
-      if (minutes === 0 && seconds === 0) {
-        return `${sign}${pad2(hours)}`;
-      } else if (seconds === 0) {
-        return `${sign}${pad2(hours)}:${pad2(minutes)}`;
-      } else {
-        return `${sign}${pad2(hours)}:${pad2(minutes)}:${pad2(seconds)}`;
-      }
     }
     return '';
   }
 
-  // Creates a Date object where its UTC components represent the local time
-  // in the given timezone. This allows using getUTC* methods to access
-  // components for that timezone consistently for calculations.
+  // Creates a Date object whose UTC components represent the local time in tzString
   function createTzAwareDate(dateObj, tzString) {
-    const targetTz = tzString === 'UTC0' ? 'UTC' : tzString;
+    const targetTz = (tzString === 'UTC0') ? 'UTC' : tzString;
     if (targetTz === 'UTC') return new Date(dateObj.getTime());
-
     const offsetMinutes = getTzOffsetMinutesAtDate(dateObj, targetTz);
     return new Date(dateObj.getTime() + offsetMinutes * 60 * 1000);
   }
 
-  // ISO week number and year helper functions (from https://weeknumber.net/how-to/javascript, adapted for UTC)
+  // Returns the timezone abbreviation string for a given date in the given tz
+  function getTzAbbreviation(dateObj, tzString) {
+    const tz = (tzString === 'UTC0') ? 'UTC' : tzString;
+    if (tz === 'UTC') return 'UTC';
+    try {
+      const formatter = new Intl.DateTimeFormat('en-US', {
+        timeZone: tz,
+        timeZoneName: 'short'
+      });
+      const parts = formatter.formatToParts(dateObj);
+      const tzPart = parts.find(p => p.type === 'timeZoneName');
+      return tzPart ? tzPart.value : tz;
+    } catch (e) {
+      return tz;
+    }
+  }
+
   function getISOWeekNumber(d) {
     const target = new Date(d.getTime());
     target.setUTCHours(0, 0, 0, 0);
-    target.setUTCDate(target.getUTCDate() + 4 - (target.getUTCDay() || 7)); // Thursday in current week
+    target.setUTCDate(target.getUTCDate() + 4 - (target.getUTCDay() || 7));
     const yearStart = new Date(Date.UTC(target.getUTCFullYear(), 0, 1));
     return Math.ceil((((target - yearStart) / 86400000) + 1) / 7);
   }
@@ -360,32 +330,24 @@ function date(argv, mockOptions = {}) {
     return target.getUTCFullYear();
   }
 
-  // Calculates week number for %U (Sunday as first day) and %W (Monday as first day)
-  function getWeekNumber(date, firstDayOfWeek) { // 0 for Sunday, 1 for Monday
+  function getWeekNumber(date, firstDayOfWeek) {
     const d = new Date(date.getTime());
     d.setUTCHours(0, 0, 0, 0);
-
     const jan1 = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-    const jan1DayOfWeek = jan1.getUTCDay(); // 0=Sun, 1=Mon, ..., 6=Sat
-
-    // Day of year (0-indexed)
+    const jan1DayOfWeek = jan1.getUTCDay();
     const dayOfYear = Math.floor((d.getTime() - jan1.getTime()) / (1000 * 60 * 60 * 24));
-
-    // Calculate week number based on firstDayOfWeek
     let adjustedDayOfYear = dayOfYear;
-    if (jan1DayOfWeek > firstDayOfWeek) { 
-        adjustedDayOfYear -= (jan1DayOfWeek - firstDayOfWeek);
+    if (jan1DayOfWeek > firstDayOfWeek) {
+      adjustedDayOfYear -= (jan1DayOfWeek - firstDayOfWeek);
     } else if (jan1DayOfWeek < firstDayOfWeek) {
-        adjustedDayOfYear += (firstDayOfWeek - jan1DayOfWeek);
+      adjustedDayOfYear += (firstDayOfWeek - jan1DayOfWeek);
     }
-
     return Math.max(0, Math.floor(adjustedDayOfYear / 7));
   }
 
   function getDayOfYear(dateObj) {
     const startOfYear = new Date(Date.UTC(dateObj.getUTCFullYear(), 0, 1));
-    const diff = dateObj.getTime() - startOfYear.getTime();
-    return Math.floor(diff / (1000 * 60 * 60 * 24)) + 1;
+    return Math.floor((dateObj.getTime() - startOfYear.getTime()) / (1000 * 60 * 60 * 24)) + 1;
   }
 
   function getQuarter(dateObj) {
@@ -394,161 +356,182 @@ function date(argv, mockOptions = {}) {
 
   // The main formatting function
   function show_date_formatter(format, dateObj, tzString, useCLocale = false) {
-    const locale = useCLocale ? 'en-US' : 'en-US';
-    const effectiveTz = tzString === 'UTC0' ? 'UTC' : tzString;
-    
-    // Create an intermediate Date object whose UTC components reflect the effectiveTz's local time
+    const effectiveTz = (tzString === 'UTC0') ? 'UTC' : tzString;
     const d = createTzAwareDate(dateObj, effectiveTz);
 
-    // Helper to format a part of the original dateObj *into* the effective timezone
     const formatIntl = (options) => {
       options.timeZone = effectiveTz;
-      return new Intl.DateTimeFormat(locale, options).format(dateObj);
+      return new Intl.DateTimeFormat('en-US', options).format(dateObj);
     };
 
     let output = '';
     for (let i = 0; i < format.length; i++) {
-      if (format[i] === '%') {
-        i++; // Move past '%'
-        let flag = '';
-        while (['-', '_', '0', '+', '^', '#'].includes(format[i])) {
-          flag += format[i];
-          i++;
-        }
-        let width = '';
-        while (/\d/.test(format[i])) {
-          width += format[i];
-          i++;
-        }
-        width = width ? parseInt(width, 10) : 0;
-
-        let modifier = '';
-        if (['E', 'O'].includes(format[i])) { // Not fully implemented for JS Intl API
-          modifier = format[i];
-          i++;
-        }
-
-        const char = format[i];
-        let value = '';
-        let numValue;
-
-        // Helper to apply flags
-        const applyFlags = (str) => {
-          let currentStr = String(str);
-
-          if (flag.includes('-')) {
-            currentStr = currentStr.replace(/^0+/, '');
-          } else if (flag.includes('_')) {
-            currentStr = currentStr.replace(/^0+/, ' ');
-          } else if (flag.includes('0') && width > 0) {
-            currentStr = pad(currentStr, width, '0');
-          } else if (!flag.includes('-') && !flag.includes('_') && width > 0) { // Default padding is '0'
-            currentStr = pad(currentStr, width, '0');
-          }
-
-          if (flag.includes('^')) {
-            currentStr = currentStr.toUpperCase();
-          } else if (flag.includes('#')) {
-            currentStr = currentStr.toLowerCase();
-          }
-          return currentStr;
-        };
-
-        switch (char) {
-          case '%': value = '%'; break;
-          case 'a': value = formatIntl({ weekday: 'short' }); break;
-          case 'A': value = formatIntl({ weekday: 'long' }); break;
-          case 'b': value = formatIntl({ month: 'short' }); break;
-          case 'B': value = formatIntl({ month: 'long' }); break;
-          case 'c': // Default: Fri Mar 15 10:30:00 UTC 2024
-            const weekday = formatIntl({ weekday: 'short' });
-            const month = formatIntl({ month: 'short' });
-            const dayOfMonth = pad(d.getUTCDate(), 2, ' ');
-            const hours = pad(d.getUTCHours(), 2);
-            const minutes = pad(d.getUTCMinutes(), 2);
-            const seconds = pad(d.getUTCSeconds(), 2);
-            const year = d.getUTCFullYear();
-            const tzAbbr = formatIntl({ timeZoneName: 'short' });
-            value = `${weekday} ${month} ${dayOfMonth} ${hours}:${minutes}:${seconds} ${tzAbbr} ${year}`;
-            break;
-          case 'C': numValue = Math.floor(d.getUTCFullYear() / 100); value = pad(numValue, 2); break;
-          case 'd': numValue = d.getUTCDate(); value = pad(numValue, 2); break;
-          case 'D': value = `${pad(d.getUTCMonth() + 1, 2)}/${pad(d.getUTCDate(), 2)}/${pad(d.getUTCFullYear() % 100, 2)}`; break;
-          case 'e': numValue = d.getUTCDate(); value = pad(numValue, 2, ' '); break;
-          case 'F': 
-            let fullYear = d.getUTCFullYear();
-            let yearStr = (flag.includes('+') && fullYear > 9999 ? '+' : '') + pad(fullYear, 4);
-            value = `${yearStr}-${pad(d.getUTCMonth() + 1, 2)}-${pad(d.getUTCDate(), 2)}`;
-            break;
-          case 'g': numValue = getISOWeekYear(d) % 100; value = pad(numValue, 2); break;
-          case 'G': numValue = getISOWeekYear(d); value = pad(numValue, 4); break;
-          case 'h': value = formatIntl({ month: 'short' }); break;
-          case 'H': numValue = d.getUTCHours(); value = pad(numValue, 2); break;
-          case 'I': numValue = d.getUTCHours() % 12 || 12; value = pad(numValue, 2); break;
-          case 'j': numValue = getDayOfYear(d); value = pad(numValue, 3); break;
-          case 'k': numValue = d.getUTCHours(); value = pad(numValue, 2, ' '); break;
-          case 'l': numValue = d.getUTCHours() % 12 || 12; value = pad(numValue, 2, ' '); break;
-          case 'm': numValue = d.getUTCMonth() + 1; value = pad(numValue, 2); break;
-          case 'M': numValue = d.getUTCMinutes(); value = pad(numValue, 2); break;
-          case 'n': value = '\n'; break;
-          case 'N':
-            numValue = dateObj.getUTCMilliseconds() * 1000000;
-            value = pad(numValue, width > 0 ? width : 9); // Pad to 9 for nanoseconds
-            break;
-          case 'p': value = formatIntl({ hour: 'numeric', hourCycle: 'h12' }).slice(-2); break;
-          case 'P': value = formatIntl({ hour: 'numeric', hourCycle: 'h12' }).slice(-2).toLowerCase(); break;
-          case 'q': numValue = getQuarter(d); value = String(numValue); break;
-          case 'r': // locale's 12-hour clock time (e.g., 11:11:04 PM)
-            value = formatIntl({ hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h12', timeZoneName: 'short' });
-            break;
-          case 'R': value = `${pad(d.getUTCHours(), 2)}:${pad(d.getUTCMinutes(), 2)}`; break;
-          case 's': numValue = Math.floor(dateObj.getTime() / 1000); value = String(numValue); break;
-          case 'S': numValue = d.getUTCSeconds(); value = pad(numValue, 2); break;
-          case 't': value = '\t'; break;
-          case 'T': value = `${pad(d.getUTCHours(), 2)}:${pad(d.getUTCMinutes(), 2)}:${pad(d.getUTCSeconds(), 2)}`; break;
-          case 'u': numValue = d.getUTCDay() === 0 ? 7 : d.getUTCDay(); value = String(numValue); break;
-          case 'U': numValue = getWeekNumber(d, 0); value = pad(numValue, 2); break;
-          case 'V': numValue = getISOWeekNumber(d); value = pad(numValue, 2); break;
-          case 'w': numValue = d.getUTCDay(); value = String(numValue); break;
-          case 'W': numValue = getWeekNumber(d, 1); value = pad(numValue, 2); break;
-          case 'x': value = formatIntl({ year: 'numeric', month: '2-digit', day: '2-digit' }); break;
-          case 'X': value = formatIntl({ hour: '2-digit', minute: '2-digit', second: '2-digit' }); break;
-          case 'y': numValue = d.getUTCFullYear() % 100; value = pad(numValue, 2); break;
-          case 'Y': value = String(d.getUTCFullYear()); break;
-          case 'z': value = formatTzOffset(getTzOffsetMinutesAtDate(dateObj, effectiveTz), 'hhmm'); break;
-          case ':z': value = formatTzOffset(getTzOffsetMinutesAtDate(dateObj, effectiveTz), 'hh:mm'); break;
-          case '::z': value = formatTzOffset(getTzOffsetMinutesAtDate(dateObj, effectiveTz), 'hh:mm:ss'); break;
-          case ':::z': value = formatTzOffset(getTzOffsetMinutesAtDate(dateObj, effectiveTz), 'precision'); break;
-          case 'Z':
-            value = formatIntl({ timeZoneName: 'short' });
-            if (effectiveTz === 'UTC' && value === '') value = 'UTC'; // Fallback for UTC if Intl fails
-            break;
-          default:
-            value = '%' + char; // Unrecognized format sequence
-            break;
-        }
-        output += applyFlags(value);
-      } else {
+      if (format[i] !== '%') {
         output += format[i];
+        continue;
       }
+
+      i++; // move past '%'
+      let flag = '';
+      while (i < format.length && ['-', '_', '0', '+', '^', '#'].includes(format[i])) {
+        flag += format[i++];
+      }
+      let width = '';
+      while (i < format.length && /\d/.test(format[i])) {
+        width += format[i++];
+      }
+      width = width ? parseInt(width, 10) : 0;
+
+      let modifier = '';
+      if (i < format.length && ['E', 'O'].includes(format[i])) {
+        modifier = format[i++];
+      }
+
+      // Handle multi-character specifiers: %:z, %::z, %:::z
+      let char;
+      if (format[i] === ':') {
+        // Peek ahead to count colons and check for trailing 'z'
+        let colons = 0;
+        let j = i;
+        while (j < format.length && format[j] === ':') { colons++; j++; }
+        if (j < format.length && format[j] === 'z') {
+          char = ':'.repeat(colons) + 'z';
+          i = j; // i will be incremented after switch
+        } else {
+          char = format[i];
+        }
+      } else {
+        char = format[i];
+      }
+
+      let value = '';
+
+      const applyFlags = (str) => {
+        let s = String(str);
+        if (flag.includes('-')) {
+          s = s.replace(/^0+/, '') || '0';
+        } else if (flag.includes('_')) {
+          s = s.replace(/^0+/, '') || '0';
+          if (width > 0) s = s.padStart(width, ' ');
+        } else if (flag.includes('0') && width > 0) {
+          s = s.padStart(width, '0');
+        } else if (width > 0) {
+          s = s.padStart(width, '0');
+        }
+        if (flag.includes('^')) s = s.toUpperCase();
+        else if (flag.includes('#')) s = s.toLowerCase();
+        return s;
+      };
+
+      switch (char) {
+        case '%': value = '%'; break;
+        case 'a': value = formatIntl({ weekday: 'short' }); break;
+        case 'A': value = formatIntl({ weekday: 'long' }); break;
+        case 'b': value = formatIntl({ month: 'short' }); break;
+        case 'B': value = formatIntl({ month: 'long' }); break;
+        case 'c': {
+          const weekday = formatIntl({ weekday: 'short' });
+          const month   = formatIntl({ month: 'short' });
+          const dayStr  = pad(d.getUTCDate(), 2, ' ');
+          const hh      = pad(d.getUTCHours(), 2);
+          const mm      = pad(d.getUTCMinutes(), 2);
+          const ss      = pad(d.getUTCSeconds(), 2);
+          const yr      = d.getUTCFullYear();
+          const tzAbbr  = getTzAbbreviation(dateObj, effectiveTz);
+          value = `${weekday} ${month} ${dayStr} ${hh}:${mm}:${ss} ${tzAbbr} ${yr}`;
+          break;
+        }
+        case 'C': value = pad(Math.floor(d.getUTCFullYear() / 100), 2); break;
+        case 'd': value = pad(d.getUTCDate(), 2); break;
+        case 'D': value = `${pad(d.getUTCMonth() + 1, 2)}/${pad(d.getUTCDate(), 2)}/${pad(d.getUTCFullYear() % 100, 2)}`; break;
+        case 'e': value = pad(d.getUTCDate(), 2, ' '); break;
+        case 'F': {
+          let yr = d.getUTCFullYear();
+          let yrStr = (flag.includes('+') && yr > 9999 ? '+' : '') + pad(yr, 4);
+          value = `${yrStr}-${pad(d.getUTCMonth() + 1, 2)}-${pad(d.getUTCDate(), 2)}`;
+          break;
+        }
+        case 'g': value = pad(getISOWeekYear(d) % 100, 2); break;
+        case 'G': value = pad(getISOWeekYear(d), 4); break;
+        case 'h': value = formatIntl({ month: 'short' }); break;
+        case 'H': value = pad(d.getUTCHours(), 2); break;
+        case 'I': value = pad(d.getUTCHours() % 12 || 12, 2); break;
+        case 'j': value = pad(getDayOfYear(d), 3); break;
+        case 'k': value = pad(d.getUTCHours(), 2, ' '); break;
+        case 'l': value = pad(d.getUTCHours() % 12 || 12, 2, ' '); break;
+        case 'm': value = pad(d.getUTCMonth() + 1, 2); break;
+        case 'M': value = pad(d.getUTCMinutes(), 2); break;
+        case 'n': value = '\n'; break;
+        case 'N': {
+          const ns = dateObj.getUTCMilliseconds() * 1000000;
+          value = pad(ns, width > 0 ? width : 9);
+          break;
+        }
+        case 'p': {
+          const h12 = formatIntl({ hour: 'numeric', hourCycle: 'h12' });
+          value = h12.slice(-2).toUpperCase();
+          break;
+        }
+        case 'P': {
+          const h12 = formatIntl({ hour: 'numeric', hourCycle: 'h12' });
+          value = h12.slice(-2).toLowerCase();
+          break;
+        }
+        case 'q': value = String(getQuarter(d)); break;
+        case 'r':
+          value = formatIntl({ hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h12' });
+          break;
+        case 'R': value = `${pad(d.getUTCHours(), 2)}:${pad(d.getUTCMinutes(), 2)}`; break;
+        case 's': value = String(Math.floor(dateObj.getTime() / 1000)); break;
+        case 'S': value = pad(d.getUTCSeconds(), 2); break;
+        case 't': value = '\t'; break;
+        case 'T': value = `${pad(d.getUTCHours(), 2)}:${pad(d.getUTCMinutes(), 2)}:${pad(d.getUTCSeconds(), 2)}`; break;
+        case 'u': value = String(d.getUTCDay() === 0 ? 7 : d.getUTCDay()); break;
+        case 'U': value = pad(getWeekNumber(d, 0), 2); break;
+        case 'V': value = pad(getISOWeekNumber(d), 2); break;
+        case 'w': value = String(d.getUTCDay()); break;
+        case 'W': value = pad(getWeekNumber(d, 1), 2); break;
+        case 'x': value = formatIntl({ year: 'numeric', month: '2-digit', day: '2-digit' }); break;
+        case 'X': value = formatIntl({ hour: '2-digit', minute: '2-digit', second: '2-digit' }); break;
+        case 'y': value = pad(d.getUTCFullYear() % 100, 2); break;
+        case 'Y': {
+          let yr = d.getUTCFullYear();
+          if (flag.includes('+') && yr > 9999) {
+            value = '+' + String(yr);
+          } else {
+            value = String(yr);
+          }
+          break;
+        }
+        case 'z':    value = formatTzOffset(getTzOffsetMinutesAtDate(dateObj, effectiveTz), 'hhmm'); break;
+        case ':z':   value = formatTzOffset(getTzOffsetMinutesAtDate(dateObj, effectiveTz), 'hh:mm'); break;
+        case '::z':  value = formatTzOffset(getTzOffsetMinutesAtDate(dateObj, effectiveTz), 'hh:mm:ss'); break;
+        case ':::z': value = formatTzOffset(getTzOffsetMinutesAtDate(dateObj, effectiveTz), 'precision'); break;
+        case 'Z':
+          value = getTzAbbreviation(dateObj, effectiveTz);
+          break;
+        default:
+          value = '%' + (flag || '') + (width || '') + (modifier || '') + char;
+          break;
+      }
+      output += applyFlags(value);
     }
     return output;
   }
 
-  // Adjusts the format string for %-N resolution based on gettime_res
   function adjust_resolution(format) {
     let copy = '';
     let adjusted = false;
     for (let i = 0; i < format.length; i++) {
       if (format[i] === '%') {
-        if (format[i+1] === '-' && format[i+2] === 'N') {
-          copy += `%9N`; // Assuming nanosecond precision (always 9 for JS mock)
+        if (format[i + 1] === '-' && format[i + 2] === 'N') {
+          copy += `%9N`;
           i += 2;
           adjusted = true;
         } else {
           copy += format[i];
-          if (format[i+1] === '%') { // Handle %%
-            copy += format[i+1];
+          if (format[i + 1] === '%') {
+            copy += format[i + 1];
             i++;
           }
         }
@@ -568,13 +551,12 @@ function date(argv, mockOptions = {}) {
   let get_resolution = false;
   let batch_file = null;
   let reference = null;
-  let tzstring = null; // Default timezone for operations and display
-  let parsedTzFromDateStr = null; // Explicit TZ if parsed from -d or -s string
+  let tzstring = null;
   let debug_date_parsing = false;
 
   const { options, args } = parseArgs(argv);
 
-  // Process options
+  // Process options (all keys are now canonical short chars or special constants)
   for (const optKey in options) {
     switch (optKey) {
       case 'd': datestr = options[optKey]; break;
@@ -583,9 +565,9 @@ function date(argv, mockOptions = {}) {
       case RESOLUTION_OPTION: get_resolution = true; break;
       case RFC_3339_OPTION: {
         const rfc_3339_formats = [
-          "%Y-%m-%d",                     // date
-          "%Y-%m-%d %H:%M:%S%:z",         // seconds
-          "%Y-%m-%d %H:%M:%S.%N%:z"       // ns
+          "%Y-%m-%d",
+          "%Y-%m-%d %H:%M:%S%:z",
+          "%Y-%m-%d %H:%M:%S.%N%:z"
         ];
         const arg = options[optKey];
         const mappedIndex = ["date", "seconds", "ns"].indexOf(arg);
@@ -598,30 +580,33 @@ function date(argv, mockOptions = {}) {
       }
       case 'I': {
         const iso_8601_formats = [
-          "%Y-%m-%d",                     // date
-          "%Y-%m-%dT%H:%M:%S%:z",         // seconds
-          "%Y-%m-%dT%H:%M:%S,%N%:z",      // ns
-          "%Y-%m-%dT%H%:z",               // hours
-          "%Y-%m-%dT%H:%M%:z"             // minutes
+          "%Y-%m-%d",
+          "%Y-%m-%dT%H:%M:%S%:z",
+          "%Y-%m-%dT%H:%M:%S,%N%:z",
+          "%Y-%m-%dT%H%:::z",
+          "%Y-%m-%dT%H:%M%:z"
         ];
         const arg = options[optKey];
-        let mappedIndex;
-        if (arg === '') {
-          mappedIndex = time_spec_map.date; // Default for -I is date precision
-        } else {
-          const argToIndexMap = { "hours": 3, "minutes": 4, "date": 0, "seconds": 1, "ns": 2 };
-          mappedIndex = argToIndexMap[arg];
-        }
-
-        if (mappedIndex === undefined || mappedIndex === -1) {
+        const argToIndexMap = { "": 0, "date": 0, "hours": 3, "minutes": 4, "seconds": 1, "ns": 2 };
+        const mappedIndex = argToIndexMap[arg];
+        if (mappedIndex === undefined) {
           error(1, `invalid argument '${arg}' for '--iso-8601'`);
+        }
+        if (format !== null) {
+          error(1, "multiple output formats specified");
         }
         format = iso_8601_formats[mappedIndex];
         format_in_c_locale = true;
         break;
       }
       case 'r': reference = options[optKey]; break;
-      case 'R': format = rfc_email_format; format_in_c_locale = true; break;
+      case 'R':
+        if (format !== null) {
+          error(1, "multiple output formats specified");
+        }
+        format = rfc_email_format;
+        format_in_c_locale = true;
+        break;
       case 's': set_datestr = options[optKey]; set_date = true; break;
       case 'u': tzstring = "UTC0"; break;
     }
@@ -629,34 +614,31 @@ function date(argv, mockOptions = {}) {
 
   // Process positional arguments
   let positionalFormat = null;
-  let positionalSetDateStr = null;
 
   for (const arg of args) {
     if (arg.startsWith('+')) {
       if (positionalFormat) error(1, "multiple output formats specified");
       positionalFormat = arg.substring(1);
     } else {
-      if (positionalSetDateStr) error(1, `extra operand '${arg}'`);
-      positionalSetDateStr = arg;
+      const dateSourceOptions = (datestr ? 1 : 0) + (batch_file ? 1 : 0) + (reference ? 1 : 0) + (get_resolution ? 1 : 0);
+      if (dateSourceOptions) {
+        error(1, `the argument '${arg}' lacks a leading '+';\nwhen using an option to specify date(s), any non-option\nargument must be a format string beginning with '+'`);
+      }
+      if (set_date) {
+        error(1, `the argument '${arg}' lacks a leading '+';\nwhen using an option to specify date(s), any non-option\nargument must be a format string beginning with '+'`);
+      }
+      set_datestr = arg;
+      set_date = true;
     }
   }
 
   if (positionalFormat) {
-    if (format) error(1, "multiple output formats specified");
+    if (format !== null) error(1, "multiple output formats specified");
     format = positionalFormat;
-  }
-  
-  if (positionalSetDateStr) {
-    const dateSourceOptions = (datestr ? 1 : 0) + (batch_file ? 1 : 0) + (reference ? 1 : 0) + (get_resolution ? 1 : 0);
-    if (dateSourceOptions) {
-        error(1, `the argument '${positionalSetDateStr}' lacks a leading '+';\nwhen using an option to specify date(s), any non-option\nargument must be a format string beginning with '+'`);
-    }
-    set_datestr = positionalSetDateStr;
-    set_date = true;
   }
 
   // Check for mutually exclusive options related to date source
-  let option_specified_date = (datestr ? 1 : 0) + (batch_file ? 1 : 0) + (reference ? 1 : 0) + (get_resolution ? 1 : 0);
+  const option_specified_date = (datestr ? 1 : 0) + (batch_file ? 1 : 0) + (reference ? 1 : 0) + (get_resolution ? 1 : 0);
 
   if (option_specified_date > 1) {
     error(1, "the options to specify dates for printing are mutually exclusive");
@@ -666,38 +648,32 @@ function date(argv, mockOptions = {}) {
     error(1, "the options to print and set the time may not be used together");
   }
 
-  // Default format if none specified
   if (!format) {
-    if (get_resolution) {
-      format = "%s.%N"; // This is handled by formatter now, not special return
-    } else {
-      format = DATE_FMT_LANGINFO_DEFAULT;
-    }
+    format = DATE_FMT_LANGINFO_DEFAULT;
   }
-  
+
   const format_res = adjust_resolution(format) || format;
 
   if (!tzstring) {
-    tzstring = getenv("TZ") || 'UTC0'; // Default to UTC if no TZ is set
+    tzstring = getenv("TZ") || 'UTC';
   }
 
   let finalOutput = '';
   let ok = true;
-  let when = gettime(); // Default to 'now'
+  let when = gettime();
 
   if (batch_file !== null) {
     let fileContents;
-    let inputFilenameForError = batch_file;
-
     try {
       fileContents = readFileSync(batch_file);
     } catch (e) {
-      error(1, `${inputFilenameForError}: ${e.message}`);
+      // error() already threw if file not found; rethrow
+      throw e;
     }
 
     const lines = fileContents.split('\n');
     for (let i = 0; i < lines.length; i++) {
-      let line = lines[i].trim();
+      const line = lines[i].trim();
       if (!line) continue;
 
       const { date: parsedDate, tz: explicitTzFromBatch } = parseDatetime(line, gettime(), tzstring);
@@ -710,7 +686,7 @@ function date(argv, mockOptions = {}) {
         finalOutput += show_date_formatter(format_res, parsedDate, effectiveTzForBatch, format_in_c_locale) + '\n';
       }
     }
-  } else { // Single date processing
+  } else {
     let valid_date = true;
     let explicitTz = null;
 
@@ -718,17 +694,20 @@ function date(argv, mockOptions = {}) {
       try {
         when = stat(reference).mtime;
       } catch (e) {
-        error(1, e.message);
+        throw e;
       }
     } else if (get_resolution) {
-      // For --resolution, date object is conceptually epoch + 1 nanosecond (mocked)
-      // The format "%s.%N" will then yield 0.000000001
-      when = new Date(0); 
-      when.setUTCMilliseconds(gettime_res() / 1000000); // Set milliseconds for %N to pick up
-    } else if (set_datestr) {
+      // --resolution: output "0.000000001" for 1ns resolution
+      // Format is "%s.%N". We need when=epoch+0ms but gettime_res()ns.
+      // %s outputs floor(dateObj.getTime()/1000) = 0
+      // %N outputs dateObj.getUTCMilliseconds()*1000000
+      // For 1ns resolution: we need %N to output "000000001"
+      // But JS only has ms precision, so we fake it: store res in a side channel
+      when = new Date(0);
+      // We'll handle --resolution output specially below
+    } else if (set_date && set_datestr) {
       const { date: parsed, tz: parsedExplicitTz } = parseDatetime(set_datestr, gettime(), tzstring);
       if (!parsed || isNaN(parsed.getTime())) {
-        // Try POSIX-style MMDDhhmm[[CC]YY][.ss]
         const posixParsed = parsePosixDate(set_datestr, gettime(), tzstring);
         if (!posixParsed || isNaN(posixParsed.getTime())) {
           valid_date = false;
@@ -748,7 +727,6 @@ function date(argv, mockOptions = {}) {
         explicitTz = parsedExplicitTz;
       }
     }
-    // If no specific date option, `when` remains `gettime()` (now)
 
     if (!valid_date) {
       error(1, `invalid date '${datestr || set_datestr}'`);
@@ -765,18 +743,26 @@ function date(argv, mockOptions = {}) {
       stderrFn(`output format: "${format}"\n`);
     }
 
-    // If an explicit TZ was found in the date string, it overrides the default tzstring for display
-    const effectiveTzForDisplay = explicitTz || tzstring;
-    finalOutput = show_date_formatter(format_res, when, effectiveTzForDisplay, format_in_c_locale);
+    if (get_resolution) {
+      // Special handling: produce "0.NNNNNNNNN" where N = resolution in ns
+      const resNs = gettime_res(); // e.g. 1 for 1ns
+      const seconds = '0';
+      const nanoStr = String(resNs).padStart(9, '0');
+      finalOutput = `${seconds}.${nanoStr}`;
+    } else {
+      const effectiveTzForDisplay = explicitTz || tzstring;
+      finalOutput = show_date_formatter(format_res, when, effectiveTzForDisplay, format_in_c_locale);
+    }
   }
 
-  // Remove trailing newline if it's not explicitly part of the format string (e.g., %n)
-  if (!format.includes('%n') && finalOutput.endsWith('\n')) {
+  // Remove trailing newline added by batch processing if format doesn't contain %n
+  if (!format.includes('%n') && finalOutput.endsWith('\n') && batch_file === null) {
     finalOutput = finalOutput.slice(0, -1);
   }
 
   if (!ok) {
-    error(1, `Errors encountered during date processing.`);
+    // Partial success in batch mode: already printed what we could, just return what we have
+    return finalOutput;
   }
 
   return finalOutput;
