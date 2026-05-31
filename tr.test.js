@@ -1,4 +1,4 @@
-import { spawnSync } from 'child_process';
+import { execFileSync } from 'child_process';
 
 
 function tr(argvOrString, input = "") {
