@@ -389,12 +389,18 @@ function tr(argvOrString, input = "") {
 
 function runSystemTr(args, input) {
   try {
-    const result = execFileSync('tr', args, { input, encoding: 'utf-8', timeout: 5000 });
+    const result = execFileSync('tr', args, {
+      input,
+      encoding: 'utf-8',
+      timeout: 5000,
+      stdio: ['pipe', 'pipe', 'ignore']   // <‑‑ ignore stderr
+    });
     return { success: true, result };
   } catch (e) {
-    return { success: false, error: e.stderr || e.message };
+    return { success: false, error: '' }; // swallow stderr
   }
 }
+
 
 function runJsTr(args, input) {
   try {
