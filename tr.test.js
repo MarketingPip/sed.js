@@ -1,9 +1,11 @@
+const { execFileSync } = require('child_process');
+
 function tr(argvOrString, input = "") {
   let argv;
   if (typeof argvOrString === 'string') {
     argv = argvOrString.split(/\s+/).filter(s => s !== '');
   } else if (Array.isArray(argvOrString)) {
-    argv = [...argvOrString]; // Make a mutable copy
+    argv = [...argvOrString];
   } else {
     throw new Error('Invalid argvOrString. Must be a string or array.');
   }
@@ -14,10 +16,10 @@ function tr(argvOrString, input = "") {
     'blank': '\t ',
     'cntrl': '\x00-\x1f\x7f',
     'digit': '0-9',
-    'graph': '\x21-\x7e', // Printable characters, not including space
+    'graph': '\x21-\x7e',
     'lower': 'a-z',
-    'print': '\x20-\x7e', // Printable characters, including space
-    'punct': '!-/:-@\\[-`{-~', // Covers 33-47, 58-64, 91-96, 123-126
+    'print': '\x20-\x7e',
+    'punct': '!-/:-@\\[-`{-~',
     'space': '\t\n\v\f\r ',
     'upper': 'A-Z',
     'xdigit': '0-9A-Fa-f',
@@ -26,11 +28,9 @@ function tr(argvOrString, input = "") {
   function expandRange(startChar, endChar) {
     const startCode = startChar.charCodeAt(0);
     const endCode = endChar.charCodeAt(0);
-
     if (startCode > endCode) {
-      throw new Error(`Invalid range: ${startChar}-${endChar} (start char code ${startCode} is greater than end char code ${endCode})`);
+      throw new Error(`range-endpoints of '${startChar}-${endChar}' are in reverse collating sequence order`);
     }
-
     const result = [];
     for (let i = startCode; i <= endCode; i++) {
       result.push(i);
@@ -38,23 +38,17 @@ function tr(argvOrString, input = "") {
     return result;
   }
 
-  // Parses escape sequences like \n, \t, \\, \NNN (octal), or literal chars.
-  // Returns { value: byteCode, length: consumedChars }
   function parseEscapeSequence(str, pos) {
     const char = str[pos];
-    
-    // Standard single-character escapes
     switch (char) {
       case 'n': return { value: 0x0A, length: 1 };
       case 't': return { value: 0x09, length: 1 };
       case 'r': return { value: 0x0D, length: 1 };
-      case 'b': return { value: 0x08, length: 1 }; // Backspace
-      case 'f': return { value: 0x0C, length: 1 }; // Form feed
-      case 'v': return { value: 0x0B, length: 1 }; // Vertical tab
-      case '\\': return { value: 0x5C, length: 1 }; // Backslash literal
+      case 'b': return { value: 0x08, length: 1 };
+      case 'f': return { value: 0x0C, length: 1 };
+      case 'v': return { value: 0x0B, length: 1 };
+      case '\\': return { value: 0x5C, length: 1 };
     }
-
-    // Octal escape \NNN (1 to 3 digits)
     if (char >= '0' && char <= '7') {
       let octalValue = 0;
       let len = 0;
@@ -64,54 +58,31 @@ function tr(argvOrString, input = "") {
           octalValue = (octalValue * 8) + parseInt(digit, 10);
           len++;
         } else {
-          // A non-octal digit terminated the sequence. E.g. \109 -> '9' is not octal.
           throw new Error(`Invalid octal digit '${digit}' in escape sequence at index ${pos + k}.`);
         }
-      }
-      if (len === 0) { // Should not happen if `char` was '0'-'7' and loop started.
-        throw new Error(`Malformed octal escape sequence at index ${pos}`);
       }
       if (octalValue > 255) {
         throw new Error(`Octal value \\${octalValue.toString(8)} (${octalValue}) exceeds 255 at index ${pos}.`);
       }
       return { value: octalValue, length: len };
     }
-
-    // Literal character after backslash (e.g., \x, \8, \9)
     return { value: char.charCodeAt(0), length: 1 };
   }
 
-  // Expands a character set string into an array of unique byte codes (0-255).
-  // `isSet2` affects how repeat syntax `[CHAR*]` is handled for infinite repetition.
-  // Returns { bytes: number[], infiniteRepeatChar: number|null, isSingleRange: boolean, rangeStartChar: number, rangeEndChar: number }
-  function expandSetInternal(setStr, isSet2 = false) {
-    const resultBytes = [];
-    const seenBytes = new Set(); // For ensuring uniqueness in the resulting byte array
-    let infiniteRepeatChar = null; // Used for SET2's [CHAR*]
+  function expandSetInternal(setStr, isSet2 = false, allowDynamicRepeat = false) {
+    const segments = [];
+    let hasInfiniteRepeat = false;
+    let infiniteRepeatChar = null;
     let i = 0;
-    let isSingleRange = false;
-    let rangeStartChar = -1;
-    let rangeEndChar = -1;
-
-    // Helper to add unique bytes to resultBytes and seenBytes
-    const addUniqueByte = (byte) => {
-      if (!seenBytes.has(byte)) {
-        seenBytes.add(byte);
-        resultBytes.push(byte);
-      }
-    };
-    const addUniqueBytes = (bytes) => {
-        bytes.forEach(addUniqueByte);
-    };
 
     while (i < setStr.length) {
       const char = setStr[i];
 
       if (char === '\\') {
-        i++; // Move past '\'
+        i++;
         if (i >= setStr.length) throw new Error('Unterminated escape sequence.');
         const escapeResult = parseEscapeSequence(setStr, i);
-        addUniqueByte(escapeResult.value);
+        segments.push({ type: 'bytes', bytes: [escapeResult.value] });
         i += escapeResult.length;
         continue;
       }
@@ -128,9 +99,8 @@ function tr(argvOrString, input = "") {
           if (!CHAR_CLASSES[className]) {
             throw new Error(`Unknown character class: [:${className}:]`);
           }
-          // Expand class string recursively, then add unique bytes to result
-          const { bytes: classBytes } = expandSetInternal(CHAR_CLASSES[className]);
-          addUniqueBytes(classBytes);
+          const classResult = expandSetInternal(CHAR_CLASSES[className]);
+          segments.push({ type: 'bytes', bytes: classResult.bytes });
           i = closeBracketIndex + 1;
           continue;
         }
@@ -144,33 +114,55 @@ function tr(argvOrString, input = "") {
           const repeatCountStr = parts[1];
 
           let charCodeToRepeat;
-          if (charToRepeatStr.length === 2 && charToRepeatStr[0] === '\\') { // Single-char escape in repeat, e.g. "\n"
-              const escapeResult = parseEscapeSequence(charToRepeatStr, 1);
-              // Only allow valid single-byte escape sequences (including octal up to \377)
-              if (escapeResult.length > 1 && !(charToRepeatStr[1] >= '0' && charToRepeatStr[1] <= '7' && escapeResult.length <= 3)) { 
-                  throw new Error(`Invalid char in repeat syntax: [${charToRepeatStr}*${repeatCountStr}] must be a single character or simple escape.`);
-              }
-              charCodeToRepeat = escapeResult.value;
-          } else if (charToRepeatStr.length === 1) { // Literal char in repeat
-              charCodeToRepeat = charToRepeatStr.charCodeAt(0);
-          } else {
+          if (charToRepeatStr.length === 2 && charToRepeatStr[0] === '\\') {
+            const escapeResult = parseEscapeSequence(charToRepeatStr, 1);
+            if (escapeResult.length > 1 && !(charToRepeatStr[1] >= '0' && charToRepeatStr[1] <= '7' && escapeResult.length <= 3)) {
               throw new Error(`Invalid char in repeat syntax: [${charToRepeatStr}*${repeatCountStr}] must be a single character or simple escape.`);
+            }
+            charCodeToRepeat = escapeResult.value;
+          } else if (charToRepeatStr.length === 1) {
+            charCodeToRepeat = charToRepeatStr.charCodeAt(0);
+          } else {
+            throw new Error(`Invalid char in repeat syntax: [${charToRepeatStr}*${repeatCountStr}] must be a single character or simple escape.`);
           }
 
-          if (repeatCountStr === '') { // [CHAR*]
-            if (isSet2) { // For SET2, this means infinite repeat
-              infiniteRepeatChar = charCodeToRepeat;
-            } else { // For SET1, means one instance for length calculation
-              addUniqueByte(charCodeToRepeat);
+          if (repeatCountStr === '') {
+            if (!isSet2) {
+              throw new Error('the [c*] repeat construct may not appear in string1');
             }
-          } else { // [CHAR*NUM]
+            if (!allowDynamicRepeat) {
+              throw new Error('the [c*] construct may appear in string2 only when translating');
+            }
+            if (hasInfiniteRepeat) {
+              throw new Error('only one [c*] repeat construct may appear in string2');
+            }
+            hasInfiniteRepeat = true;
+            infiniteRepeatChar = charCodeToRepeat;
+            segments.push({ type: 'dynamic', char: charCodeToRepeat });
+          } else {
             const count = parseInt(repeatCountStr, 10);
             if (isNaN(count) || count < 0) {
               throw new Error(`Invalid repeat count in [${innerContent}]`);
             }
-            for (let k = 0; k < count; k++) {
-              resultBytes.push(charCodeToRepeat); // Repeat count adds to the bytes, duplicates are allowed here for length
-              // Note: seenBytes is not updated for these repeats as they impact length, not uniqueness of mapping.
+            if (!isSet2) {
+              throw new Error('the [c*] repeat construct may not appear in string1');
+            }
+            if (count === 0) {
+              if (!allowDynamicRepeat) {
+                throw new Error('the [c*] construct may appear in string2 only when translating');
+              }
+              if (hasInfiniteRepeat) {
+                throw new Error('only one [c*] repeat construct may appear in string2');
+              }
+              hasInfiniteRepeat = true;
+              infiniteRepeatChar = charCodeToRepeat;
+              segments.push({ type: 'dynamic', char: charCodeToRepeat });
+            } else {
+              const repeatedBytes = [];
+              for (let k = 0; k < count; k++) {
+                repeatedBytes.push(charCodeToRepeat);
+              }
+              segments.push({ type: 'bytes', bytes: repeatedBytes });
             }
           }
           i = closeBracketIndex + 1;
@@ -182,7 +174,7 @@ function tr(argvOrString, input = "") {
           if (eqChar.length !== 1) {
             throw new Error(`Invalid equivalence class: [=${eqChar}=]`);
           }
-          addUniqueByte(eqChar.charCodeAt(0));
+          segments.push({ type: 'bytes', bytes: [eqChar.charCodeAt(0)] });
           i = closeBracketIndex + 1;
           continue;
         }
@@ -191,35 +183,33 @@ function tr(argvOrString, input = "") {
       if (i + 1 < setStr.length && setStr[i + 1] === '-' && i + 2 < setStr.length) {
         const startChar = char;
         const endChar = setStr[i + 2];
-        
-        // Ranges only support literal characters, not escapes (e.g. `\n-a` is invalid in GNU tr)
         if (startChar === '\\' || endChar === '\\') {
-            throw new Error(`Escape sequences are not permitted as range boundaries: ${setStr.substring(i, i+3)}`);
+          throw new Error(`Escape sequences are not permitted as range boundaries: ${setStr.substring(i, i+3)}`);
         }
-        
         const expanded = expandRange(startChar, endChar);
-        addUniqueBytes(expanded);
-
-        if (resultBytes.length === expanded.length && i === 0 && i + 3 === setStr.length) { // Check if it's the *only* thing in the set string
-          isSingleRange = true;
-          rangeStartChar = startChar.charCodeAt(0);
-          rangeEndChar = endChar.charCodeAt(0);
-        }
-        i += 3; 
+        segments.push({ type: 'bytes', bytes: expanded });
+        i += 3;
         continue;
       }
 
-      addUniqueByte(char.charCodeAt(0));
+      segments.push({ type: 'bytes', bytes: [char.charCodeAt(0)] });
       i++;
     }
 
-    return { bytes: resultBytes, infiniteRepeatChar, isSingleRange, rangeStartChar, rangeEndChar };
+    const resultBytes = [];
+    for (const segment of segments) {
+      if (segment.type === 'bytes') {
+        resultBytes.push(...segment.bytes);
+      }
+    }
+
+    return { bytes: resultBytes, hasInfiniteRepeat, infiniteRepeatChar, segments };
   }
 
-  // --- Flag Parsing ---
   let hasDelete = false;
   let hasSqueeze = false;
   let hasComplement = false;
+  let hasTruncate = false;
   const positionalArgs = [];
 
   for (const arg of argv) {
@@ -228,7 +218,8 @@ function tr(argvOrString, input = "") {
         const option = arg[i];
         if (option === 'd') hasDelete = true;
         else if (option === 's') hasSqueeze = true;
-        else if (option === 'c') hasComplement = true;
+        else if (option === 'c' || option === 'C') hasComplement = true;
+        else if (option === 't') hasTruncate = true;
         else throw new Error(`Invalid option: -${option}`);
       }
     } else {
@@ -236,144 +227,118 @@ function tr(argvOrString, input = "") {
     }
   }
 
-  // --- Positional Argument Assignment (GNU tr compatible, allowing for complex test cases) ---
-  let deleteSetString = '';
-  let squeezeSetString = '';
-  let xlateSet1String = '';
-  let xlateSet2String = '';
+  if (positionalArgs.length === 0) {
+    throw new Error('missing operand');
+  }
 
-  const pArgsRaw = [...positionalArgs]; // Work with a mutable copy
+  let set1String = '';
+  let set2String = '';
 
-  // Error check for empty argument list
-  if (pArgsRaw.length === 0) {
-    if (hasDelete || hasSqueeze || hasComplement) {
-        throw new Error('Missing character set argument(s) for operations.');
+  if (hasDelete && hasSqueeze) {
+    if (positionalArgs.length < 1) throw new Error('missing operand');
+    set1String = positionalArgs[0];
+    if (positionalArgs.length < 2) throw new Error('missing operand');
+    set2String = positionalArgs[1];
+    if (positionalArgs.length > 2) throw new Error('extra operand');
+  } else if (hasDelete) {
+    if (positionalArgs.length < 1) throw new Error('missing operand');
+    set1String = positionalArgs[0];
+    if (positionalArgs.length > 1) throw new Error('extra operand');
+  } else if (hasSqueeze) {
+    if (positionalArgs.length < 1) throw new Error('missing operand');
+    set1String = positionalArgs[0];
+    if (positionalArgs.length >= 2) {
+      set2String = positionalArgs[1];
     }
-    return ""; // `tr()` or `tr("")` with no flags
+    if (positionalArgs.length > 2) throw new Error('extra operand');
+  } else {
+    if (positionalArgs.length < 1) throw new Error('missing operand');
+    set1String = positionalArgs[0];
+    if (positionalArgs.length < 2) {
+      throw new Error('missing operand');
+    }
+    set2String = positionalArgs[1];
+    if (positionalArgs.length > 2) throw new Error('extra operand');
   }
 
-  let currentPos = 0;
+  const isTranslateActive = set2String !== '' && !hasDelete;
 
-  // Handle delete and squeeze sets first if flags are present
-  if (hasDelete) {
-      if (currentPos >= pArgsRaw.length) throw new Error('Delete mode requires a set.');
-      deleteSetString = pArgsRaw[currentPos++];
-  }
-  if (hasSqueeze) {
-      if (currentPos >= pArgsRaw.length) {
-          // If -s without its own explicit set, and -d took one, -s reuses the -d set.
-          if (hasDelete && deleteSetString !== '') {
-              squeezeSetString = deleteSetString;
-          } else {
-              throw new Error('Squeeze mode requires a set.');
-          }
-      } else {
-          squeezeSetString = pArgsRaw[currentPos++];
-      }
+  let { bytes: set1Bytes } = expandSetInternal(set1String);
+  let set2Result = expandSetInternal(set2String, true, isTranslateActive);
+  let set2Bytes = set2Result.bytes;
+  let set2HasInfinite = set2Result.hasInfiniteRepeat;
+  let set2Infinite = set2Result.infiniteRepeatChar;
+  let set2Segments = set2Result.segments;
+
+  if (hasTruncate && set2Bytes.length > 0 && set1Bytes.length > set2Bytes.length) {
+    set1Bytes = set1Bytes.slice(0, set2Bytes.length);
   }
 
-  // Remaining arguments are for translation (SET1 and SET2)
-  const remainingForTranslate = pArgsRaw.slice(currentPos);
-  if (remainingForTranslate.length > 2) {
-      throw new Error('Too many positional arguments for translation after delete/squeeze sets.');
-  }
-  if (remainingForTranslate.length >= 1) {
-      xlateSet1String = remainingForTranslate[0];
-  }
-  if (remainingForTranslate.length >= 2) {
-      xlateSet2String = remainingForTranslate[1];
-  }
+  const allBytes = Array.from({ length: 256 }, (_, i) => i);
 
-  // Special case: `tr -c SET1` without SET2 implicitly means `tr -dc SET1`.
-  // This takes precedence over translate if SET2 is empty.
-  if (hasComplement && !hasDelete && !hasSqueeze && xlateSet1String !== '' && xlateSet2String === '') {
-      hasDelete = true; // Act as if -d was passed
-      deleteSetString = xlateSet1String; // The delete set is now this xlateSet1String
-      xlateSet1String = ''; // Clear for translation, as it's a delete operation now
-  }
-  
-  // Error check for bare translate mode: `tr SET1` (without SET2 and no flags) must throw.
-  if (!hasDelete && !hasSqueeze && !hasComplement && xlateSet1String !== '' && xlateSet2String === '') {
-      throw new Error('Translate mode requires both SET1 and SET2.');
-  }
-
-  // --- Expand Sets and Apply Complement ---
-  let { bytes: deleteTargetBytes } = expandSetInternal(deleteSetString);
-  let { bytes: squeezeTargetBytes } = expandSetInternal(squeezeSetString);
-  let { bytes: translateSet1Expanded, isSingleRange: set1IsSingleRange, rangeStartChar: set1RangeStartChar, rangeEndChar: set1RangeEndChar } = expandSetInternal(xlateSet1String);
-  let { bytes: translateSet2Expanded, infiniteRepeatChar: infiniteRepeatCharForTranslate, isSingleRange: set2IsSingleRange, rangeStartChar: set2RangeStartChar, rangeEndChar: set2RangeEndChar } = expandSetInternal(xlateSet2String, true);
-
-  // Apply complement to the relevant sets if `hasComplement` is true.
   if (hasComplement) {
-    if (hasDelete) {
-        const originalSet = new Set(deleteTargetBytes);
-        deleteTargetBytes = Array.from({ length: 256 }, (_, i) => i).filter(i => !originalSet.has(i));
-    }
-    if (hasSqueeze) {
-        const originalSet = new Set(squeezeTargetBytes);
-        squeezeTargetBytes = Array.from({ length: 256 }, (_, i) => i).filter(i => !originalSet.has(i));
-    }
-    // Complement for translation applies to SET1. Only if translation is active.
-    const isTranslationActive = xlateSet1String !== '' && (xlateSet2String !== '' || infiniteRepeatCharForTranslate !== null);
-    if (isTranslationActive) { // Make sure this is not the `tr -c SET1` -> delete !SET1 case.
-      const originalSet = new Set(translateSet1Expanded);
-      translateSet1Expanded = Array.from({ length: 256 }, (_, i) => i).filter(i => !originalSet.has(i));
+    const originalSet = new Set(set1Bytes);
+    set1Bytes = allBytes.filter(i => !originalSet.has(i));
+  }
+
+  if (set2HasInfinite) {
+    const explicitChars = set2Bytes.length;
+    const expansion = Math.max(0, set1Bytes.length - explicitChars);
+    set2Bytes = [];
+    for (const segment of set2Segments) {
+      if (segment.type === 'bytes') {
+        set2Bytes.push(...segment.bytes);
+      } else if (segment.type === 'dynamic') {
+        for (let k = 0; k < expansion; k++) {
+          set2Bytes.push(segment.char);
+        }
+      }
     }
   }
 
-  // --- Initialize Lookup Tables ---
-  const xlate = Array.from({ length: 256 }, (_, i) => i); // Identity mapping
+  const xlate = Array.from({ length: 256 }, (_, i) => i);
   const deleteTable = Array(256).fill(false);
   const squeezeTable = Array(256).fill(false);
 
-  // Populate deleteTable
-  if (hasDelete) {
-    new Set(deleteTargetBytes).forEach(byte => {
-      deleteTable[byte] = true;
-    });
+  const isDeleteOpActive = hasDelete;
+  const isSqueezeOpActive = hasSqueeze;
+
+  if (isDeleteOpActive) {
+    new Set(set1Bytes).forEach(byte => deleteTable[byte] = true);
   }
 
-  // Populate squeezeTable
-  if (hasSqueeze) {
-    new Set(squeezeTargetBytes).forEach(byte => {
-      squeezeTable[byte] = true;
-    });
-  }
-  
-  // Populate xlate table
-  const isTranslationOperation = xlateSet1String !== '' && (xlateSet2String !== '' || infiniteRepeatCharForTranslate !== null);
+  if (isTranslateActive) {
+    const set2Length = set2Bytes.length;
+    const set1Length = set1Bytes.length;
 
-  if (isTranslationOperation) {
-    for (let i = 0; i < translateSet1Expanded.length; i++) {
-      const fromChar = translateSet1Expanded[i];
+    for (let i = 0; i < set1Length; i++) {
+      const fromChar = set1Bytes[i];
       let toChar;
 
-      if (i < translateSet2Expanded.length) {
-        toChar = translateSet2Expanded[i];
-      } else if (infiniteRepeatCharForTranslate !== null) {
-        toChar = infiniteRepeatCharForTranslate;
-      } else if (set1IsSingleRange && set2IsSingleRange && 
-                 (set1RangeEndChar - set1RangeStartChar + 1) > (set2RangeEndChar - set2RangeStartChar + 1)) {
-          // Special case for SET1 and SET2 both being simple ranges (e.g. a-c to x-y), and SET2 is shorter.
-          // Extend SET2 by continuing its sequence (e.g. x-y becomes x-z for a-c)
-          const offsetInSet1 = fromChar - set1RangeStartChar;
-          toChar = set2RangeStartChar + offsetInSet1;
-          // Ensure it doesn't go beyond 255.
-          if (toChar > 255) toChar = set2RangeEndChar; // Fallback to last char if extension exceeds 255
-      }
-      else if (translateSet2Expanded.length > 0) {
-        // General SET2 padding rule: repeat last char
-        toChar = translateSet2Expanded[translateSet2Expanded.length - 1];
+      if (i < set2Length) {
+        toChar = set2Bytes[i];
+      } else if (set2Length > 0) {
+        toChar = set2Bytes[set2Length - 1];
       } else {
-        // SET1 char has no mapping and no padding rule applies for translate. Mark for deletion.
-        deleteTable[fromChar] = true; 
+        deleteTable[fromChar] = true;
         continue;
       }
       xlate[fromChar] = toChar;
     }
   }
 
-  // --- Process Input ---
+  if (isSqueezeOpActive) {
+    let squeezeBytes;
+    if (hasDelete) {
+      squeezeBytes = set2Bytes;
+    } else if (isTranslateActive) {
+      squeezeBytes = set2Bytes;
+    } else {
+      squeezeBytes = set1Bytes;
+    }
+    new Set(squeezeBytes).forEach(byte => squeezeTable[byte] = true);
+  }
+
   let inputBytes;
   if (input instanceof Uint8Array) {
     inputBytes = input;
@@ -384,35 +349,31 @@ function tr(argvOrString, input = "") {
   }
 
   const outputBytes = [];
-  let lastSqueezedOutputByte = -1; // Tracks the last *output* byte that was part of a squeeze-eligible run.
+  let lastSqueezedOutputByte = -1;
 
   for (let i = 0; i < inputBytes.length; i++) {
     const currentByte = inputBytes[i];
 
-    // Step 1: Delete (applies to original input byte)
     if (deleteTable[currentByte]) {
-      continue; // Skip this byte entirely
+      continue;
     }
 
-    // Step 2: Translate (applies to non-deleted input byte)
     const translatedByte = xlate[currentByte];
 
-    // Step 3: Squeeze (applies to translated byte)
     let skipDueToSqueeze = false;
-    if (hasSqueeze) {
-        if (squeezeTable[translatedByte]) { // Current char is eligible for squeezing
-            if (translatedByte === lastSqueezedOutputByte) { // And it's a repeat of the last eligible one
-                skipDueToSqueeze = true;
-            }
-            lastSqueezedOutputByte = translatedByte; // If not skipped, this becomes the new lastSqueezedOutputByte
-        } else {
-            // Current char is not in the squeeze set. It breaks any active squeeze sequence.
-            lastSqueezedOutputByte = -1; // Reset to indicate no active squeeze sequence of an eligible char
+    if (isSqueezeOpActive) {
+      if (squeezeTable[translatedByte]) {
+        if (translatedByte === lastSqueezedOutputByte) {
+          skipDueToSqueeze = true;
         }
+        lastSqueezedOutputByte = translatedByte;
+      } else {
+        lastSqueezedOutputByte = -1;
+      }
     }
-    
+
     if (skipDueToSqueeze) {
-        continue;
+      continue;
     }
 
     outputBytes.push(translatedByte);
@@ -421,250 +382,244 @@ function tr(argvOrString, input = "") {
   return new TextDecoder().decode(new Uint8Array(outputBytes));
 }
 
+// ============================================================================
+// TEST RUNNER - Uses execFileSync for direct argument passing (no shell)
+// ============================================================================
 
+function runSystemTr(args, input) {
+  try {
+    const result = execFileSync('tr', args, { input, encoding: 'utf-8', timeout: 5000 });
+    return { success: true, result };
+  } catch (e) {
+    return { success: false, error: e.stderr || e.message };
+  }
+}
 
-describe("tr() core functionality", () => {
+function runJsTr(args, input) {
+  try {
+    const result = tr(args, input);
+    return { success: true, result };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+}
 
-  // -------------------------
-  // 1. BASIC TRANSLATION
-  // -------------------------
-  test("translate simple range", () => {
-    expect(tr(["a-c", "x-z"], "abc")).toBe("xyz");
+function compare(args, input) {
+  const sys = runSystemTr(args, input);
+  const js = runJsTr(args, input);
+
+  if (!js.success && !sys.success) return 'PASS';
+  if (!js.success) return { status: 'JS_ERR', js, sys };
+  if (!sys.success) return { status: 'SYS_ERR', js, sys };
+  if (js.result !== sys.result) return { status: 'MISMATCH', js, sys };
+
+  return 'PASS';
+}
+
+const tests = [
+  [['a', 'b'], 'a', 'basic translate'],
+  [['a-c', 'x-z'], 'abc', 'range translate'],
+  [['a-c', 'x-z'], 'abcde', 'range translate with extra'],
+  [['a', 'b'], 'banana', 'multiple occurrences'],
+  [['a', 'a'], 'aaa', 'identity'],
+  [['a-c', 'X'], 'abc', 'set2 padding'],
+  [['a-c', 'x-y'], 'abc', 'range padding'],
+  [['a-e', '12'], 'abcde', 'longer set1'],
+  [['-d', 'a'], 'banana', 'delete single'],
+  [['-d', 'a-c'], 'abcdef', 'delete range'],
+  [['-d', 'x'], 'abc', 'delete nothing'],
+  [['-d', 'a-z'], 'abc', 'delete all'],
+  [['-s', 'a'], 'aaabaaa', 'squeeze repeated'],
+  [['-s', 'a'], 'bbb', 'squeeze unaffected'],
+  [['-s', 'a'], 'aaabaa', 'squeeze multiple runs'],
+  [['-s', 'ab'], 'aaabbb', 'squeeze mixed'],
+  [['-s', 'ab'], 'ababab', 'squeeze no consecutive'],
+  [['-s', 'ab'], 'aabbbaa', 'squeeze overlapping'],
+  [['-s', 'aab'], 'aaabaaa', 'squeeze duplicate set1'],
+  [['-s', 'aba'], 'aaabaaa', 'squeeze duplicate set1 b'],
+  [['-s', 'aab'], 'bbb', 'squeeze duplicate set1 unaffected'],
+  [['-ds', 'ab', 'c'], 'aaabbbccc', 'delete then squeeze'],
+  [['-ds', 'a', 'b'], 'aaabaaa', 'delete before squeeze'],
+  [['-ds', 'ab', 'c'], 'ccc', 'delete nothing squeeze'],
+  [['-c', 'a', 'b'], 'abc', 'complement basic'],
+  [['-c', 'a', 'b'], 'aaa', 'complement all same'],
+  [['-c', 'a-z', 'A'], 'ABC123', 'complement full set'],
+  [['-c', 'a', 'bc'], 'bbb', 'complement with longer set2'],
+  [['-c', 'a', 'bc'], 'ccc', 'complement with longer set2 c'],
+  [['-c', 'a', 'bc'], 'ddd', 'complement with longer set2 d'],
+  [['-c', 'a', 'bc'], 'bbbccc', 'complement with longer set2 mixed'],
+  [['-cd', 'a'], 'abc', 'complement delete'],
+  [['-cd', 'a'], 'aaa', 'complement delete all same'],
+  [['-cd', 'a-z'], 'ABC', 'complement delete full set'],
+  [['-cs', 'a'], 'bbbccc', 'complement squeeze'],
+  [['-cs', 'a'], 'aaabaaa', 'complement squeeze unaffected'],
+  [['-cs', 'a', 'b'], 'bbbccc', 'complement squeeze translate'],
+  [['-cs', 'a', 'b'], 'aaabaaa', 'complement squeeze translate mixed'],
+  [['-cs', 'a', 'bc'], 'bbb', 'complement squeeze translate longer'],
+  [['-cs', 'a', 'bc'], 'ccc', 'complement squeeze translate longer c'],
+  [['-cs', 'a', 'bc'], 'aaabccc', 'complement squeeze translate longer mixed'],
+  [['-cds', 'a', 'b'], 'aaabaaa', 'cds basic'],
+  [['-cds', 'a', 'b'], 'abba', 'cds with b'],
+  [['-cds', 'ab', 'c'], 'aaabbbccc', 'cds delete ab'],
+  [['-cds', 'ab', 'c'], 'ccc', 'cds delete ab only c'],
+  [['-cds', 'a', 'bc'], 'aaabbbccc', 'cds with longer squeeze'],
+  [['[:lower:]', '[:upper:]'], 'hello', 'lower to upper'],
+  [['-d', '[:digit:]'], 'a1b2c3', 'delete digits'],
+  [['-d', '[:space:]'], 'a b\tc\n', 'delete space'],
+  [['-d', '[:punct:]'], 'a!b@c', 'delete punct'],
+  [['-s', '[:lower:]', '[:upper:]'], 'hello', 'squeeze lower to upper'],
+  [['\\t', '_'], 'a\tb', 'tab escape'],
+  [['\\n', '_'], 'a\nb', 'newline escape'],
+  [['\\\\', '_'], 'a\\b', 'backslash escape'],
+  [['\\141', 'x'], 'a', 'octal escape'],
+  [['\\0', 'x'], '\x00', 'octal zero'],
+  [['\\377', 'x'], '\xff', 'octal 377'],
+  [['\\r', 'x'], 'a\rb', 'carriage return escape'],
+  [['\\b', 'x'], 'a\bb', 'backspace escape'],
+  [['\\f', 'x'], 'a\fb', 'form feed escape'],
+  [['\\v', 'x'], 'a\vb', 'vertical tab escape'],
+  [['\\7', 'x'], '\x07', 'octal 7'],
+  [['\\77', 'x'], '?', 'octal 77'],
+  [['a', '[b*3]'], 'aaaa', 'repeat fixed'],
+  [['a', '[b*]'], 'aaaa', 'repeat infinite'],
+  [['a', '[\\n*2]'], 'aa', 'repeat with escape'],
+  [['a', '[x*0]'], 'aaa', 'repeat zero'],
+  [['ab', '[x*0]'], 'ab', 'repeat zero set1=2'],
+  [['abc', '[x*0]'], 'abc', 'repeat zero set1=3'],
+  [['a', '[x*0]y'], 'a', 'repeat zero with suffix'],
+  [['ab', '[x*0]y'], 'ab', 'repeat zero with suffix set1=2'],
+  [['abc', '[x*0]y'], 'abc', 'repeat zero with suffix set1=3'],
+  [['abcd', '[x*0]y'], 'abcd', 'repeat zero with suffix set1=4'],
+  [['a', 'y[x*0]'], 'a', 'repeat zero with prefix'],
+  [['ab', 'y[x*0]'], 'ab', 'repeat zero with prefix set1=2'],
+  [['abc', 'y[x*0]'], 'abc', 'repeat zero with prefix set1=3'],
+  [['abc', '[x*1]y'], 'abc', 'repeat one with suffix'],
+  [['abc', '[x*2]y'], 'abc', 'repeat two with suffix'],
+  [['abc', '[x*]y'], 'abc', 'repeat infinite with suffix'],
+  [['abcd', '[x*0]y'], 'abcd', 'repeat zero with suffix set1=4'],
+  [['abcd', '[x*1]y'], 'abcd', 'repeat one with suffix set1=4'],
+  [['abcd', '[x*2]y'], 'abcd', 'repeat two with suffix set1=4'],
+  [['abcd', '[x*]y'], 'abcd', 'repeat infinite with suffix set1=4'],
+  [['abc', 'y[x*1]'], 'abc', 'repeat one with prefix'],
+  [['abc', 'y[x*2]'], 'abc', 'repeat two with prefix'],
+  [['abc', 'y[x*]'], 'abc', 'repeat infinite with prefix'],
+  [['abc', '[x*1][y*1]'], 'abc', 'two repeats'],
+  [['abc', '[x*2][y*1]'], 'abc', 'two repeats mixed'],
+  [['abc', 'y[x*]z'], 'abc', 'repeat with multiple other'],
+  [['abcd', 'y[x*]z'], 'abcd', 'repeat with multiple other set1=4'],
+  [['abcde', 'y[x*]z'], 'abcde', 'repeat with multiple other set1=5'],
+  [['abc', 'y[x*0]z'], 'abc', 'repeat zero with multiple other'],
+  [['abcd', 'y[x*0]z'], 'abcd', 'repeat zero with multiple other set1=4'],
+  [['a', 'y[x*]z'], 'a', 'repeat with more other than set1'],
+  [['ab', 'yz[x*]'], 'ab', 'repeat with more other prefix than set1'],
+  [['[a*]', 'xy'], 'aaa', 'error infinite in set1'],
+  [['[a*0]', 'xy'], 'aaa', 'error zero in set1'],
+  [['-d', '[a*0]'], 'aaa', 'error zero in set1 delete'],
+  [['-s', '[a*0]'], 'aaa', 'error zero in set1 squeeze'],
+  [['abc', '[x*][y*]'], 'abc', 'error multiple infinite'],
+  [['abc', '[x*0][y*0]'], 'abc', 'error multiple zero'],
+  [['[=a=]', 'b'], 'a', 'equivalence'],
+  [['[=b=]', 'x'], 'b', 'equivalence b'],
+  [['[=1=]', 'x'], '1', 'equivalence digit'],
+  [['-t', 'a-c', 'x'], 'abc', 'truncate basic'],
+  [['-t', 'a-c', 'xy'], 'abc', 'truncate partial'],
+  [['-t', 'a', 'bc'], 'a', 'truncate single'],
+  [['-t', 'a-c', '[x*]'], 'abc', 'truncate with infinite'],
+  [['-t', 'a-c', '[x*0]'], 'abc', 'truncate with zero'],
+  [['-t', 'a', ''], 'abc', 'truncate empty set2'],
+  [['a', 'b'], '', 'empty input'],
+  [['', ''], 'abc', 'empty sets translate'],
+  [['-d', ''], 'abc', 'empty delete'],
+  [['-s', ''], 'abc', 'empty squeeze'],
+  [['z-a', 'x'], 'abc', 'invalid range'],
+  [['[:fake:]'], 'abc', 'invalid class'],
+  [['a', '[b**]'], 'aaa', 'invalid repeat'],
+  [['a'], 'abc', 'missing SET2'],
+  [['a', 'b', 'c'], 'abc', 'too many args'],
+  [[], 'abc', 'no args'],
+  [['-d'], 'abc', 'delete no set'],
+  [['-s'], 'abc', 'squeeze no set'],
+  [['-ds', 'a'], 'abc', 'ds missing set2'],
+  [['-d', 'a', 'b'], 'abc', 'delete extra arg'],
+  [['-s', 'a', 'b', 'c'], 'abc', 'squeeze too many args'],
+  [['-c', 'a'], 'abc', 'complement missing set2'],
+  [['-c', 'a', 'b', 'c'], 'abc', 'complement too many'],
+  [['-d', 'a', 'a', 'b'], 'a', 'delete before translate'],
+  [['-s', 'b', 'a', 'b'], 'aa', 'translate before squeeze'],
+  [['a', 'b'], 'a\xffb', 'binary input'],
+  [['\\xff', 'x'], '\xff', 'high byte escape'],
+  [['aab', 'xyz'], 'aab', 'duplicate set1'],
+  [['aba', 'xyz'], 'aba', 'duplicate set1 pattern'],
+  [['baa', 'xyz'], 'baa', 'duplicate set1 pattern b'],
+  [['aab', 'x'], 'aab', 'duplicate set1 padding'],
+  [['aab', 'xyzw'], 'aab', 'duplicate set1 longer set2'],
+  [['aab', 'xy'], 'aab', 'duplicate set1 set2 shorter'],
+  [['aaa', 'xyz'], 'aaa', 'triple duplicate set1'],
+  [['aab', '[x*]y'], 'aab', 'duplicate set1 with infinite'],
+  [['aab', '[x*]'], 'aab', 'duplicate set1 with infinite only'],
+  [['aab', 'y[x*]'], 'aab', 'duplicate set1 with infinite prefix'],
+  [['abc', 'xxy'], 'abc', 'duplicate set2'],
+  [['abc', 'xxx'], 'abc', 'triple duplicate set2'],
+  [['a-z', 'A-Z'], 'hello', 'lower to upper range'],
+  [['0-9', 'a-j'], '12345', 'digit range'],
+  [['!-/', 'a-g'], '!"#$%&', 'punct range'],
+  [['[:alpha:]', 'x'], 'abc123', 'alpha class'],
+  [['-d', '[:alpha:]'], 'abc123', 'delete alpha'],
+  [['-s', '[:space:]'], 'a  b\t\tc', 'squeeze space'],
+  [['[:alnum:]', 'x'], 'abc123!@#', 'alnum class'],
+  [['[:punct:]', 'x'], '!@#abc', 'punct class'],
+  [['[:upper:]', '[:lower:]'], 'HELLO', 'upper to lower'],
+  [['[:xdigit:]', 'x'], 'deadBEEF', 'xdigit class'],
+  [['[:cntrl:]', 'x'], '\x00\x01\x02', 'cntrl class'],
+  [['[:graph:]', 'x'], 'abc!@#', 'graph class'],
+  [['[:print:]', 'x'], 'abc !@#', 'print class'],
+  [['[:blank:]', 'x'], 'a\t b', 'blank class'],
+  [['-s', 'a', 'bc'], 'aa', 'squeeze translate single'],
+  [['-s', 'a', 'bc'], 'aaa', 'squeeze translate triple'],
+  [['-s', 'ab', 'cd'], 'aaabbb', 'squeeze translate mixed'],
+  [['-s', 'ab', 'cd'], 'ababab', 'squeeze translate alternating'],
+  [['-s', 'ab', 'cd'], 'aabbbaa', 'squeeze translate pattern'],
+  [['-s', 'aab', 'xyz'], 'aaabaaa', 'squeeze translate duplicate set1'],
+  [['-s', 'aab', 'xyz'], 'bbb', 'squeeze translate duplicate set1 unaffected'],
+  [['-s', 'a', '[x*0]'], 'aaa', 'squeeze with zero repeat'],
+  [['-s', 'a', '[x*1]'], 'aaa', 'squeeze with one repeat'],
+  [['-s', 'ab', '[x*0]'], 'aaabbb', 'squeeze with zero repeat mixed'],
+  [['-s', 'ab', '[x*]'], 'aaabbb', 'squeeze with infinite repeat'],
+  [['-ds', 'a', '[x*0]'], 'aaabaaa', 'ds with zero repeat'],
+  [['-ds', 'a', '[x*1]'], 'aaabaaa', 'ds with one repeat'],
+  [['-ds', 'ab', '[x*0]'], 'aaabbbccc', 'ds with zero repeat mixed'],
+  [['-ds', 'ab', '[x*]'], 'aaabbbccc', 'ds with infinite repeat'],
+  [['-cds', 'a', '[x*0]'], 'aaabaaa', 'cds with zero repeat'],
+  [['-cds', 'a', '[x*]'], 'aaabaaa', 'cds with infinite repeat'],
+  [['-cs', 'a', '[x*0]'], 'bbbccc', 'cs with zero repeat'],
+  [['-cs', 'a', '[x*]'], 'bbbccc', 'cs with infinite repeat'],
+];
+
+describe('tr compatibility suite', function () {
+  tests.forEach(([args, input, description]) => {
+    it(description, function () {
+      const result = compare(args, input);
+
+      if (result === 'PASS') return;
+
+      if (result.status === 'JS_ERR') {
+        throw new Error(
+          `JS errored: ${result.js.error}\nSystem result: ${JSON.stringify(result.sys.result)}`
+        );
+      }
+
+      if (result.status === 'SYS_ERR') {
+        throw new Error(
+          `System errored: ${result.sys.error}\nJS result: ${JSON.stringify(result.js.result)}`
+        );
+      }
+
+      if (result.status === 'MISMATCH') {
+        expect(result.js.result).to.equal(
+          result.sys.result,
+          `JS result: ${JSON.stringify(result.js.result)}\nSystem result: ${JSON.stringify(result.sys.result)}`
+        );
+      }
+    });
   });
-
-  test("translate with extra chars untouched", () => {
-    expect(tr(["a-c", "x-z"], "abcde")).toBe("xyzde");
-  });
-
-  test("translate single char", () => {
-    expect(tr(["a", "b"], "a")).toBe("b");
-  });
-
-  test("translate multiple occurrences", () => {
-    expect(tr(["a", "b"], "banana")).toBe("bbnbnb");
-  });
-
-  test("translate identity", () => {
-    expect(tr(["a", "a"], "aaa")).toBe("aaa");
-  });
-
-  // -------------------------
-  // 2. RANGE + PADDING
-  // -------------------------
-  test("set2 padding repeats last char", () => {
-    expect(tr(["a-c", "X"], "abc")).toBe("XXX");
-  });
-
-  test("range extension behavior", () => {
-    expect(tr(["a-c", "x-y"], "abc")).toBe("xyz");
-  });
-
-  test("longer set1 than set2", () => {
-    expect(tr(["a-e", "12"], "abcde")).toBe("12222");
-  });
-
-  // -------------------------
-  // 3. DELETE MODE
-  // -------------------------
-  test("delete single char", () => {
-    expect(tr(["-d", "a"], "banana")).toBe("bnn");
-  });
-
-  test("delete range", () => {
-    expect(tr(["-d", "a-c"], "abcdef")).toBe("def");
-  });
-
-  test("delete nothing if not present", () => {
-    expect(tr(["-d", "x"], "abc")).toBe("abc");
-  });
-
-  test("delete all characters", () => {
-    expect(tr(["-d", "a-z"], "abc")).toBe("");
-  });
-
-  // -------------------------
-  // 4. SQUEEZE MODE
-  // -------------------------
-  test("squeeze repeated chars", () => {
-    expect(tr(["-s", "a"], "aaabaaa")).toBe("aba");
-  });
-
-  test("squeeze different char unaffected", () => {
-    expect(tr(["-s", "a"], "bbb")).toBe("bbb");
-  });
-
-  test("squeeze multiple runs", () => {
-    expect(tr(["-s", "a"], "aaabaa")).toBe("aba");
-  });
-
-  test("squeeze mixed chars", () => {
-    expect(tr(["-s", "ab"], "aaabbb")).toBe("ab");
-  });
-
-  // -------------------------
-  // 5. DELETE + SQUEEZE
-  // -------------------------
-  test("delete then squeeze", () => {
-    expect(tr(["-ds", "ab"], "aaabbbccc")).toBe("ccc");
-  });
-
-  test("delete before squeeze order", () => {
-    expect(tr(["-ds", "a"], "aaabaaa")).toBe("b");
-  });
-
-  test("squeeze uses delete set if omitted", () => {
-    expect(tr(["-ds", "a"], "aaabaaa")).toBe("b");
-  });
-
-  // -------------------------
-  // 6. COMPLEMENT
-  // -------------------------
-  test("complement basic", () => {
-    expect(tr(["-c", "a"], "abc")).toBe("aaa");
-  });
-
-  test("complement delete", () => {
-    expect(tr(["-cd", "a"], "abc")).toBe("a");
-  });
-
-  test("complement squeeze", () => {
-    expect(tr(["-cs", "a"], "bbbccc")).toBe("b");
-  });
-
-  test("complement full set", () => {
-    expect(tr(["-c", "a-z"], "ABC")).toBe("aaa");
-  });
-
-  // -------------------------
-  // 7. CHARACTER CLASSES
-  // -------------------------
-  test("lower to upper", () => {
-    expect(tr(["[:lower:]", "[:upper:]"], "hello")).toBe("HELLO");
-  });
-
-  test("delete digits", () => {
-    expect(tr(["-d", "[:digit:]"], "a1b2c3")).toBe("abc");
-  });
-
-  test("space class", () => {
-    expect(tr(["-d", "[:space:]"], "a b\tc\n")).toBe("abc");
-  });
-
-  test("punct class", () => {
-    expect(tr(["-d", "[:punct:]"], "a!b@c")).toBe("abc");
-  });
-
-  // -------------------------
-  // 8. ESCAPE SEQUENCES
-  // -------------------------
-  test("tab escape", () => {
-    expect(tr(["\\t", "_"], "a\tb")).toBe("a_b");
-  });
-
-  test("newline escape", () => {
-    expect(tr(["\\n", "_"], "a\nb")).toBe("a_b");
-  });
-
-  test("backslash escape", () => {
-    expect(tr(["\\\\", "_"], "a\\b")).toBe("a_b");
-  });
-
-  test("octal escape", () => {
-    expect(tr(["\\141", "x"], "a")).toBe("x");
-  });
-
-  // -------------------------
-  // 9. REPEAT SYNTAX
-  // -------------------------
-  test("repeat fixed count", () => {
-    expect(tr(["a", "[b*3]"], "aaaa")).toBe("bbbb");
-  });
-
-  test("repeat infinite (set2)", () => {
-    expect(tr(["a", "[b*]"], "aaaa")).toBe("bbbb");
-  });
-
-  test("repeat with escape char", () => {
-    expect(tr(["a", "[\\n*2]"], "aa")).toBe("\n\n");
-  });
-
-  // -------------------------
-  // 10. EQUIVALENCE CLASS
-  // -------------------------
-  test("equivalence class literal", () => {
-    expect(tr(["[=a=]", "b"], "a")).toBe("b");
-  });
-
-  // -------------------------
-  // 11. STRING ARG PARSING
-  // -------------------------
-  test("string argv form", () => {
-    expect(tr("-s a", "aaab")).toBe("ab");
-  });
-
-  test("string with multiple args", () => {
-    expect(tr("-d a", "banana")).toBe("bnn");
-  });
-
-  // -------------------------
-  // 12. EDGE CASES
-  // -------------------------
-  test("empty input", () => {
-    expect(tr(["a", "b"], "")).toBe("");
-  });
-
-  test("empty sets", () => {
-    expect(() => tr(["-d"], "abc")).toThrow();
-  });
-
-  test("invalid range", () => {
-    expect(() => tr(["z-a", "x"], "abc")).toThrow();
-  });
-
-  test("invalid class", () => {
-    expect(() => tr(["[:fake:]"], "abc")).toThrow();
-  });
-
-  test("invalid repeat syntax", () => {
-    expect(() => tr(["a", "[b**]"], "aaa")).toThrow();
-  });
-
-  test("missing SET2", () => {
-    expect(() => tr(["a"], "abc")).toThrow();
-  });
-
-  test("too many args", () => {
-    expect(() => tr(["a", "b", "c"], "abc")).toThrow();
-  });
-
-  // -------------------------
-  // 13. UINT8ARRAY SUPPORT
-  // -------------------------
-  test("Uint8Array input", () => {
-    const input = new TextEncoder().encode("abc");
-    const result = tr(["a", "x"], input);
-    expect(result).toBe("xbc");
-  });
-
-  // -------------------------
-  // 14. ORDER OF OPERATIONS
-  // -------------------------
-  test("delete before translate", () => {
-    expect(tr(["-d", "a", "a", "b"], "a")).toBe("");
-  });
-
-  test("translate before squeeze", () => {
-    expect(tr(["-s", "b", "a", "b"], "aa")).toBe("b");
-  });
-
-  // -------------------------
-  // 15. STRESS TEST
-  // -------------------------
-  test("large input deterministic", () => {
-    const input = "a".repeat(100000);
-    const out1 = tr(["a", "b"], input);
-    const out2 = tr(["a", "b"], input);
-    expect(out1).toBe(out2);
-  });
-
 });
