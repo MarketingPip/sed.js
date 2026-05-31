@@ -1,4 +1,5 @@
-const { execFileSync } = require('child_process');
+import { spawnSync } from 'child_process';
+
 
 function tr(argvOrString, input = "") {
   let argv;
