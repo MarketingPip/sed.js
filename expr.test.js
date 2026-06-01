@@ -15,14 +15,13 @@ import { spawnSync } from 'child_process';
 // Parentheses arrive as escaped tokens: '\\(' '\\)'
 // Special functions (length/substr/index) consume directly from the
 // arg stream — they are NOT stack-based.
-
-/** GNU expr stores integers internally and prints them canonically. */
-function canonicalize(s) {
-  if (!/^-?\d+$/.test(s)) return s;
-  const sign = s.startsWith('-') ? '-' : '';
-  const digits = s.slice(sign.length).replace(/^0+/, '');
-  return digits === '' ? '0' : sign + digits;
-}
+//
+// GNU expr internal representation:
+// - Raw tokens from command line are stored as STRING values
+// - Results of operations are stored as INTEGER values (canonicalized)
+// - When printing: integers use mpz_out_str (canonical form),
+//   strings use the raw value as-is
+// - null() checks: integer → value == 0; string → empty or all zeros
 
 export function exprEval(args) {
   if (!Array.isArray(args) || args.length === 0) throw new Error('syntax error');
@@ -35,15 +34,47 @@ export function exprEval(args) {
   const next = () => args[pos++];
   const done = () => pos >= args.length;
 
-  const isInt    = (s) => /^-?\d+$/.test(String(s));
-  const toInt    = (s) => { if (!isInt(s)) throw new Error('non-integer argument'); return parseInt(s, 10); };
-  // GNU expr: integer values are falsy if numerically zero ("00", "-0" etc. are falsy)
-  const isTruthy = (v) => isInt(v) ? parseInt(v, 10) !== 0 : v !== '';
+  const isIntStr = (s) => /^-?\d+$/.test(String(s));
+  const toInt = (s) => { if (!isIntStr(s)) throw new Error('non-integer argument'); return parseInt(s, 10); };
+
+  // Check if a string value is "null" (empty or all zeros like "00", "-0")
+  const isNullString = (s) => {
+    if (s === '') return true;
+    let i = s.startsWith('-') ? 1 : 0;
+    for (; i < s.length; i++) {
+      if (s[i] !== '0') return false;
+    }
+    return true;
+  };
+
+  // Check if a value is null/zero
+  const isNull = (v) => v.type === 'integer' ? parseInt(v.value, 10) === 0 : isNullString(v.value);
+
+  // Create an integer value (always canonicalized: no leading zeros, -0 → 0)
+  const intValue = (n) => ({ type: 'integer', value: String(n) });
+
+  // Create a string value (raw, from command line token)
+  const strValue = (s) => ({ type: 'string', value: s });
+
+  // Coerce value to string for string operations
+  const toStringVal = (v) => {
+    if (v.type === 'integer') return strValue(v.value);
+    return v;
+  };
+
+  // Coerce value to integer for arithmetic operations
+  const toInteger = (v) => {
+    if (v.type === 'integer') return parseInt(v.value, 10);
+    if (!isIntStr(v.value)) throw new Error('non-integer argument');
+    return parseInt(v.value, 10);
+  };
 
   const cmp = (op, l, r) => {
-    const numeric = isInt(l) && isInt(r);
-    const lv = numeric ? parseInt(l, 10) : l;
-    const rv = numeric ? parseInt(r, 10) : r;
+    const lStr = l.type === 'string' ? l.value : l.value;
+    const rStr = r.type === 'string' ? r.value : r.value;
+    const numeric = isIntStr(lStr) && isIntStr(rStr);
+    const lv = numeric ? parseInt(lStr, 10) : lStr;
+    const rv = numeric ? parseInt(rStr, 10) : rStr;
     switch (op) {
       case '=':  return lv === rv;
       case '!=': return lv !== rv;
@@ -58,29 +89,54 @@ export function exprEval(args) {
 
   function parseOr() {
     let left = parseAnd();
-    // GNU expr: | returns '0' rather than '' when falling through to an empty right operand
-    while (peek() === '|') { next(); const r = parseAnd(); left = isTruthy(left) ? left : (r === '' ? '0' : r); }
+    while (peek() === '|') {
+      next();
+      const r = parseAnd();
+      if (isNull(left)) {
+        // Left is null — take right. If right is also null, return integer 0.
+        if (isNull(r)) {
+          left = intValue(0);
+        } else {
+          left = r;
+        }
+      }
+      // else: left is truthy, keep it unchanged
+    }
     return left;
   }
 
   function parseAnd() {
     let left = parseCmp();
-    while (peek() === '&') { next(); const r = parseCmp(); left = (isTruthy(left) && isTruthy(r)) ? left : '0'; }
+    while (peek() === '&') {
+      next();
+      const r = parseCmp();
+      if (isNull(left) || isNull(r)) {
+        left = intValue(0);
+      }
+      // else: both truthy, keep left unchanged
+    }
     return left;
   }
 
   function parseCmp() {
     let left = parseAdd();
     const OPS = new Set(['=', '!=', '>', '<', '>=', '<=']);
-    while (OPS.has(peek())) { const op = next(); const r = parseAdd(); left = cmp(op, left, r) ? '1' : '0'; }
+    while (OPS.has(peek())) {
+      const op = next();
+      const r = parseAdd();
+      left = intValue(cmp(op, left, r) ? 1 : 0);
+    }
     return left;
   }
 
   function parseAdd() {
     let left = parseMul();
     while (peek() === '+' || peek() === '-') {
-      const op = next(); const r = parseMul();
-      left = String(op === '+' ? toInt(left) + toInt(r) : toInt(left) - toInt(r));
+      const op = next();
+      const r = parseMul();
+      const lNum = toInteger(left);
+      const rNum = toInteger(r);
+      left = intValue(op === '+' ? lNum + rNum : lNum - rNum);
     }
     return left;
   }
@@ -88,12 +144,14 @@ export function exprEval(args) {
   function parseMul() {
     let left = parseMatch();
     while (peek() === '*' || peek() === '/' || peek() === '%') {
-      const op = next(); const r = parseMatch();
-      const l = toInt(left), rv = toInt(r);
-      if (rv === 0 && (op === '/' || op === '%')) throw new Error('division by zero');
-      if (op === '*') left = String(l * rv);
-      if (op === '/') left = String(Math.trunc(l / rv)); // POSIX: truncate toward zero
-      if (op === '%') left = String(l % rv);
+      const op = next();
+      const r = parseMatch();
+      const lNum = toInteger(left);
+      const rNum = toInteger(r);
+      if (rNum === 0 && (op === '/' || op === '%')) throw new Error('division by zero');
+      if (op === '*') left = intValue(lNum * rNum);
+      if (op === '/') left = intValue(Math.trunc(lNum / rNum));
+      if (op === '%') left = intValue(lNum % rNum);
     }
     return left;
   }
@@ -112,9 +170,9 @@ export function exprEval(args) {
         out += n in special ? special[n] : ('\\' + n);
         i += 2;
       } else if (pat[i] === '(' || pat[i] === ')') {
-        out += '\\' + pat[i++]; // literal paren in BRE → escape for JS
+        out += '\\' + pat[i++];
       } else if ('+?{}|'.includes(pat[i])) {
-        out += '\\' + pat[i++]; // literal in BRE, special in JS ERE
+        out += '\\' + pat[i++];
       } else {
         out += pat[i++];
       }
@@ -128,14 +186,18 @@ export function exprEval(args) {
       next();
       const pattern = next();
       if (pattern === undefined) throw new Error('syntax error');
-      // POSIX: no match returns '' if pattern has \(...\), else '0'
       const hasCaptureGroup = /\\\(/.test(pattern);
+      const leftStr = toStringVal(left).value;
       let re;
       try { re = new RegExp('^' + breToJs(pattern)); } catch { throw new Error('invalid regex'); }
-      const m = String(left).match(re);
-      if (!m)              left = hasCaptureGroup ? '' : '0';
-      else if (m[1] !== undefined) left = m[1];
-      else                left = String(m[0].length);
+      const m = leftStr.match(re);
+      if (!m) {
+        left = hasCaptureGroup ? strValue('') : intValue(0);
+      } else if (m[1] !== undefined) {
+        left = strValue(m[1]);
+      } else {
+        left = intValue(m[0].length);
+      }
     }
     return left;
   }
@@ -144,7 +206,7 @@ export function exprEval(args) {
     const tok = next();
     if (tok === undefined) throw new Error('syntax error');
 
-    // A lone ')' is never a valid primary — it must be consumed by the '(' branch
+    // A lone ')' is never a valid primary
     if (tok === ')') throw new Error('syntax error');
 
     if (tok === '(') {
@@ -157,33 +219,33 @@ export function exprEval(args) {
     if (tok === 'length') {
       const str = next();
       if (str === undefined) throw new Error('syntax error');
-      return String(str.length);
+      return intValue(str.length);
     }
 
     if (tok === 'substr') {
       const str = next(), rawPos = next(), rawLen = next();
       if (str === undefined || rawPos === undefined || rawLen === undefined) throw new Error('syntax error');
       const p = toInt(rawPos), l = toInt(rawLen);
-      // POSIX: pos < 1 yields empty string (no clamping to start of string)
-      if (p < 1) return '';
-      return String(str).substr(p - 1, Math.max(0, l));
+      // POSIX: pos < 1 yields empty string
+      if (p < 1) return strValue('');
+      return strValue(str.substr(p - 1, Math.max(0, l)));
     }
 
     if (tok === 'index') {
       const str = next(), chars = next();
       if (str === undefined || chars === undefined) throw new Error('syntax error');
       for (let j = 0; j < str.length; j++) {
-        if (chars.includes(str[j])) return String(j + 1);
+        if (chars.includes(str[j])) return intValue(j + 1);
       }
-      return '0';
+      return intValue(0);
     }
 
-    return tok;
+    return strValue(tok);
   }
 
   const result = parseExpr();
   if (!done()) throw new Error('syntax error');
-  return canonicalize(String(result ?? ''));
+  return result.value;
 }
 
 // ─────────────────────────────────────────────
@@ -194,15 +256,15 @@ function normalize(v) {
   return String(v ?? '').replace(/\r\n/g, '\n').replace(/\n$/, '');
 }
 
-// GNU expr considers any numeric string equal to 0 as falsy (e.g. "00", "-0")
-function isNumericZero(s) {
-  return /^-?\d+$/.test(s) && parseInt(s, 10) === 0;
+// GNU expr: result is falsy if it's empty string OR a numeric zero string
+function isFalsy(s) {
+  return s === '' || (/^-?\d+$/.test(s) && parseInt(s, 10) === 0);
 }
 
 function runExpr(args) {
   try {
     const data = normalize(exprEval(args));
-    return { success: data !== '' && !isNumericZero(data), data, error: null };
+    return { success: !isFalsy(data), data, error: null };
   } catch (err) {
     return { success: false, data: null, error: normalize(err?.message ?? String(err)) };
   }
@@ -239,6 +301,10 @@ async function expectSameExpr({ args }) {
     expect(port.data).toBe(system.data);
   }
 }
+
+// ─────────────────────────────────────────────
+// Original tests
+// ─────────────────────────────────────────────
 
 describe('basic arithmetic', () => {
   it('1 + 1',                        async () => expectSameExpr({ args: ['1', '+', '1'] }));
@@ -301,7 +367,7 @@ describe('string functions — substr', () => {
   it('substr abcdef 3 2 = cd',      async () => expectSameExpr({ args: ['substr', 'abcdef', '3', '2'] }));
   it('substr abcdef 6 1 = f',       async () => expectSameExpr({ args: ['substr', 'abcdef', '6', '1'] }));
   it('substr abcdef 1 100 (clamp)', async () => expectSameExpr({ args: ['substr', 'abcdef', '1', '100'] }));
-  it('substr abcdef 0 3 (pos<<1→1)', async () => expectSameExpr({ args: ['substr', 'abcdef', '0', '3'] }));
+  it('substr abcdef 0 3 (pos<1→1)', async () => expectSameExpr({ args: ['substr', 'abcdef', '0', '3'] }));
 });
 
 describe('string functions — index', () => {
@@ -386,14 +452,12 @@ describe('logical operators — empty string', () => {
 });
 
 describe('regex match operator (:) — capture groups', () => {
-  // POSIX: \( \) capture group → return captured text, not length
   it('capture group returns text',         async () => expectSameExpr({ args: ['foobar', ':', '\\(foo\\)'] }));
   it('capture group no match returns ""',  async () => expectSameExpr({ args: ['foobar', ':', '\\(baz\\)'] }));
   it('partial capture',                    async () => expectSameExpr({ args: ['abc123', ':', '[a-z]*\\([0-9]*\\)'] }));
 });
 
 describe('BRE quantifiers in : operator', () => {
-  // \+ = one-or-more, \? = zero-or-one — translated by breToJs
   it('\\+ one-or-more matches',       async () => expectSameExpr({ args: ['aaa', ':', 'a\\+'] }));
   it('\\+ one-or-more no match → 0', async () => expectSameExpr({ args: ['bbb', ':', 'a\\+'] }));
   it('\\? zero-or-one present',       async () => expectSameExpr({ args: ['ab',  ':', 'a\\?b'] }));
@@ -402,7 +466,6 @@ describe('BRE quantifiers in : operator', () => {
 });
 
 describe('chained : operators (left-to-right)', () => {
-  // Each : feeds its result as the new left operand
   it('length via chained :',   async () => expectSameExpr({ args: ['foobar', ':', 'foo\\(.*\\)', ':', '.*'] }));
   it('chain no match → 0',     async () => expectSameExpr({ args: ['foobar', ':', 'xyz', ':', '[0-9]*'] }));
 });
@@ -415,7 +478,6 @@ describe('negative number comparisons', () => {
 });
 
 describe('non-integer string comparisons', () => {
-  // 1.5 is not an integer so comparison must be lexicographic
   it('1.5 = 1.5 (string)',  async () => expectSameExpr({ args: ['1.5', '=', '1.5'] }));
   it('1.5 > 1.4 (string)',  async () => expectSameExpr({ args: ['1.5', '>', '1.4'] }));
   it('+1 = 1 (string, not numeric)', async () => expectSameExpr({ args: ['+1', '=', '1'] }));
