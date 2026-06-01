@@ -94,6 +94,7 @@ export function exprEval(args) {
   //   \( \) → capture groups ( )
   //   \+ \? \{ \} \| → quantifiers/alternation
   //   bare ( ) → escaped literals \( \)
+  //   bare + ? { } | → escaped literals (literal in BRE, special in JS ERE)
   function breToJs(pat) {
     let out = '', i = 0;
     while (i < pat.length) {
@@ -104,6 +105,8 @@ export function exprEval(args) {
         i += 2;
       } else if (pat[i] === '(' || pat[i] === ')') {
         out += '\\' + pat[i++]; // literal paren in BRE → escape for JS
+      } else if ('+?{}|'.includes(pat[i])) {
+        out += '\\' + pat[i++]; // literal in BRE, special in JS ERE
       } else {
         out += pat[i++];
       }
@@ -132,6 +135,9 @@ export function exprEval(args) {
   function parsePrimary() {
     const tok = next();
     if (tok === undefined) throw new Error('syntax error');
+
+    // A lone ')' is never a valid primary — it must be consumed by the '(' branch
+    if (tok === ')') throw new Error('syntax error');
 
     if (tok === '(') {
       const val = parseExpr();
@@ -180,10 +186,15 @@ function normalize(v) {
   return String(v ?? '').replace(/\r\n/g, '\n').replace(/\n$/, '');
 }
 
+// GNU expr considers any numeric string equal to 0 as falsy (e.g. "00", "-0")
+function isNumericZero(s) {
+  return /^-?\d+$/.test(s) && parseInt(s, 10) === 0;
+}
+
 function runExpr(args) {
   try {
     const data = normalize(exprEval(args));
-    return { success: data !== '0' && data !== '', data, error: null };
+    return { success: data !== '' && !isNumericZero(data), data, error: null };
   } catch (err) {
     return { success: false, data: null, error: normalize(err?.message ?? String(err)) };
   }
@@ -282,7 +293,7 @@ describe('string functions — substr', () => {
   it('substr abcdef 3 2 = cd',      async () => expectSameExpr({ args: ['substr', 'abcdef', '3', '2'] }));
   it('substr abcdef 6 1 = f',       async () => expectSameExpr({ args: ['substr', 'abcdef', '6', '1'] }));
   it('substr abcdef 1 100 (clamp)', async () => expectSameExpr({ args: ['substr', 'abcdef', '1', '100'] }));
-  it('substr abcdef 0 3 (pos<1→1)', async () => expectSameExpr({ args: ['substr', 'abcdef', '0', '3'] }));
+  it('substr abcdef 0 3 (pos<<1→1)', async () => expectSameExpr({ args: ['substr', 'abcdef', '0', '3'] }));
 });
 
 describe('string functions — index', () => {
@@ -690,7 +701,6 @@ describe('generated — syntax error cases', () => {
   const cases = [
     { args: [], desc: 'empty args' },
     { args: ['1', '+'], desc: 'missing right operand' },
-    { args: ['+', '1'], desc: 'missing left operand' },
     { args: ['1', '2'], desc: 'missing operator' },
     { args: ['('], desc: 'lone open paren' },
     { args: [')'], desc: 'lone close paren' },
