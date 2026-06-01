@@ -16,6 +16,14 @@ import { spawnSync } from 'child_process';
 // Special functions (length/substr/index) consume directly from the
 // arg stream — they are NOT stack-based.
 
+/** GNU expr stores integers internally and prints them canonically. */
+function canonicalize(s) {
+  if (!/^-?\d+$/.test(s)) return s;
+  const sign = s.startsWith('-') ? '-' : '';
+  const digits = s.slice(sign.length).replace(/^0+/, '');
+  return digits === '' ? '0' : sign + digits;
+}
+
 export function exprEval(args) {
   if (!Array.isArray(args) || args.length === 0) throw new Error('syntax error');
   for (const a of args) {
@@ -175,7 +183,7 @@ export function exprEval(args) {
 
   const result = parseExpr();
   if (!done()) throw new Error('syntax error');
-  return String(result ?? '');
+  return canonicalize(String(result ?? ''));
 }
 
 // ─────────────────────────────────────────────
