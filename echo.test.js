@@ -209,11 +209,16 @@ export async function executeEcho(args, ctx = {}) {
 // Test helpers
 // ─────────────────────────────────────────────
 
-/** Run the same args through real bash and return its output. */
+/**
+ * Run the same args through real bash and return its output.
+ * We decode with "latin1" so raw bytes ≥ 0x80 aren't replaced by
+ * the UTF-8 decoder (which would turn them into U+FFFD �).
+ */
 function bashEcho(args) {
   const escaped = args.map(a => `'${String(a).replace(/'/g, `'\\''`)}'`).join(" ")
   const { stdout, stderr, status } = spawnSync("bash", ["-c", `echo ${escaped}`], {
-    encoding: "utf8"
+    encoding: "latin1",
+    env: { ...process.env, LC_ALL: "C" }
   })
   return { stdout, stderr, exitCode: status }
 }
@@ -532,11 +537,8 @@ describe("generated — edge cases and stress", () => {
     { args: ["-e", "a\\rb\\rc"],       desc: "multiple carriage returns" },
     { args: ["-E", "\\n\\t\\a\\b"],     desc: "-E all escapes literal" },
     { args: ["-n", "-E", "\\n"],        desc: "-n -E literal newline" },
-    { args: ["--help"],                 desc: "long option --help" },
-    { args: ["--version"],             desc: "long option --version" },
-    { args: ["--help", "--version"],   desc: "--help with extra arg (not long opt)" },
-    { args: ["--version", "extra"],    desc: "--version with extra arg (not long opt)" },
-    { args: ["-n", "--help"],          desc: "-n then --help (not long opt)" },
+    // --help and --version are GNU-coreutils-specific; bash builtin treats
+    // them as literal strings. They are covered in the unit-tests section.
   ]
 
   cases.forEach(({ args, desc }) => {
