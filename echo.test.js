@@ -356,3 +356,252 @@ describe("echo — unit tests", () => {
     expect(r.exitCode).toBe(0)
   })
 })
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ORACLE-BASED GENERATED TEST SUITE
+// Systematically generated cases verified against real Bash echo
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe("generated — all single-letter escapes", () => {
+  const escapes = [
+    { seq: "\\\\", name: "backslash" },
+    { seq: "\\a",  name: "BEL" },
+    { seq: "\\b",  name: "backspace" },
+    { seq: "\\e",  name: "ESC" },
+    { seq: "\\E",  name: "ESC-capital" },
+    { seq: "\\f",  name: "form-feed" },
+    { seq: "\\n",  name: "newline" },
+    { seq: "\\r",  name: "carriage-return" },
+    { seq: "\\t",  name: "tab" },
+    { seq: "\\v",  name: "vertical-tab" },
+  ]
+
+  escapes.forEach(({ seq, name }) => {
+    it(`-e ${name} (${seq})`, () => matchesBash(["-e", `pre${seq}post`]))
+    it(`-e ${name} alone`,    () => matchesBash(["-e", seq]))
+    it(`-E ${name} literal`,  () => matchesBash(["-E", `pre${seq}post`]))
+  })
+})
+
+describe("generated — octal escape coverage", () => {
+  // All 1-digit octal values
+  for (let i = 0; i <= 7; i++) {
+    it(`octal \\\\0${i}`, () => matchesBash(["-e", `\\0${i}`]))
+  }
+
+  // Boundary 2-digit values
+  ;[10, 20, 37, 40, 77, 100].forEach(n => {
+    const oct = n.toString(8)
+    it(`octal \\\\0${oct} → ${n}`, () => matchesBash(["-e", `\\0${oct}`]))
+  })
+
+  // Boundary 3-digit values
+  ;[100, 177, 200, 255, 256, 377, 400].forEach(n => {
+    const oct = n.toString(8).padStart(3, "0")
+    it(`octal \\\\0${oct} (value ${n})`, () => matchesBash(["-e", `\\0${oct}`]))
+  })
+
+  // 4-digit overflow / stop-at-3 behaviour
+  ;["01234", "07771", "04000"].forEach(seq => {
+    it(`octal \\\\${seq} (4 digits, stops at 3)`, () => matchesBash(["-e", `\\${seq}`]))
+  })
+
+  // Zero-length octal → literal NUL
+  it("octal \\\\0 with no digits", () => matchesBash(["-e", "a\\0b"]))
+
+  // Octal followed immediately by another escape
+  it("octal then \\\\n", () => matchesBash(["-e", "\\0101\\n"]))
+})
+
+describe("generated — hex escape coverage", () => {
+  // All single hex digits
+  for (let i = 0; i <= 15; i++) {
+    const h = i.toString(16)
+    it(`hex \\\\x${h} single digit`, () => matchesBash(["-e", `\\x${h}`]))
+  }
+
+  // Boundary 2-digit values
+  ;[0x00, 0x01, 0x41, 0x61, 0x7f, 0x80, 0xff].forEach(n => {
+    const h = n.toString(16).padStart(2, "0")
+    it(`hex \\\\x${h} → ${n}`, () => matchesBash(["-e", `\\x${h}`]))
+  })
+
+  // 3-digit stop-at-2 behaviour
+  ;["x414", "x616", "x0000"].forEach(seq => {
+    it(`hex \\\\${seq} (3+ chars, stops at 2)`, () => matchesBash(["-e", `\\${seq}`]))
+  })
+
+  // No digits after x
+  it("hex \\\\x with no digits", () => matchesBash(["-e", "a\\xb"]))
+  it("hex \\\\x space", () => matchesBash(["-e", "\\x not-hex"]))
+})
+
+describe("generated — flag combination matrix", () => {
+  const flagSets = [
+    [],
+    ["-n"],
+    ["-e"],
+    ["-E"],
+    ["-ne"],
+    ["-en"],
+    ["-nE"],
+    ["-En"],
+    ["-eE"],
+    ["-Ee"],
+    ["-neE"],
+    ["-nEe"],
+    ["-enE"],
+    ["-eEn"],
+    ["-Een"],
+    ["-Ene"],
+  ]
+
+  const payloads = [
+    "plain",
+    "with\\nescapes",
+    "a\\tb\\tc",
+    "hello\\c world",
+    "\\x41\\x42\\x43",
+    "\\0101\\0102",
+    "trail\\",
+  ]
+
+  flagSets.forEach(flags => {
+    payloads.forEach(payload => {
+      const flagStr = flags.join("") || "(no flags)"
+      it(`flags ${flagStr} with "${payload.replace(/\\/g, "\\\\")}"`, () =>
+        matchesBash([...flags, payload]))
+    })
+  })
+})
+
+describe("generated — multi-argument scenarios", () => {
+  const cases = [
+    { args: ["one", "two", "three"], desc: "three plain args" },
+    { args: ["-n", "one", "two"],    desc: "-n then two args" },
+    { args: ["-e", "one", "two\\n"], desc: "-e with escape in second arg" },
+    { args: ["-E", "one\\n", "two"], desc: "-E disables escapes across args" },
+    { args: ["-n", "-e", "a\\n", "b\\n"], desc: "-n -e multiple escaped args" },
+    { args: ["a", "-e", "\\n"],      desc: "non-flag stops parsing, -e literal" },
+    { args: ["-n", "hello", "-e"],   desc: "flag then arg then literal -e" },
+    { args: ["-ne", "a\\n", "b\\t"], desc: "combined flags two escaped args" },
+    { args: [],                      desc: "no args at all" },
+    { args: [""],                    desc: "single empty string" },
+    { args: ["", ""],                desc: "two empty strings" },
+    { args: ["-n", ""],              desc: "-n with empty string" },
+  ]
+
+  cases.forEach(({ args, desc }) => {
+    it(desc, () => matchesBash(args))
+  })
+})
+
+describe("generated — \\c at every position", () => {
+  const positions = [
+    { args: ["-e", "\\chello"],        desc: "start" },
+    { args: ["-e", "h\\cello"],        desc: "second char" },
+    { args: ["-e", "he\\cllo"],        desc: "middle" },
+    { args: ["-e", "hell\\co"],        desc: "near end" },
+    { args: ["-e", "hello\\c"],        desc: "at end" },
+    { args: ["-e", "a\\nb\\c\\nc"],    desc: "multiple \\c" },
+    { args: ["-e", "\\c"],             desc: "only \\c" },
+    { args: ["-ne", "hello\\c world"], desc: "-ne with \\c" },
+    { args: ["-en", "hello\\c world"], desc: "-en with \\c" },
+  ]
+
+  positions.forEach(({ args, desc }) => {
+    it(`\\c at ${desc}`, () => matchesBash(args))
+  })
+})
+
+describe("generated — edge cases and stress", () => {
+  const cases = [
+    { args: ["-e", "\\\\\\\\"],         desc: "double backslash" },
+    { args: ["-e", "\\\\\\\\\\n"],      desc: "double backslash then n" },
+    { args: ["-e", "\\"],               desc: "lone trailing backslash" },
+    { args: ["-e", "\\\\"],              desc: "two backslashes (one escaped)" },
+    { args: ["-e", "\\\\\\"],            desc: "three backslashes" },
+    { args: ["-e", "\\q\\w\\e\\r"],     desc: "unknown escapes" },
+    { args: ["-e", "\\0\\00\\000"],     desc: "octal zero variants" },
+    { args: ["-e", "\\x0\\x00\\x000"],  desc: "hex zero variants" },
+    { args: ["-e", "\\xfg\\xGH"],       desc: "invalid hex digits" },
+    { args: ["-e", "\\777\\800"],       desc: "octal 777 then literal 8" },
+    { args: ["-e", "\\xFF\\xfg"],       desc: "hex FF then invalid" },
+    { args: ["-e", "line1\\n\\nline2"], desc: "consecutive newlines" },
+    { args: ["-e", "\\t\\t\\t"],        desc: "consecutive tabs" },
+    { args: ["-e", "a\\rb\\rc"],       desc: "multiple carriage returns" },
+    { args: ["-E", "\\n\\t\\a\\b"],     desc: "-E all escapes literal" },
+    { args: ["-n", "-E", "\\n"],        desc: "-n -E literal newline" },
+    { args: ["--help"],                 desc: "long option --help" },
+    { args: ["--version"],             desc: "long option --version" },
+    { args: ["--help", "--version"],   desc: "--help with extra arg (not long opt)" },
+    { args: ["--version", "extra"],    desc: "--version with extra arg (not long opt)" },
+    { args: ["-n", "--help"],          desc: "-n then --help (not long opt)" },
+  ]
+
+  cases.forEach(({ args, desc }) => {
+    it(desc, () => matchesBash(args))
+  })
+})
+
+describe("generated — xpgEcho context flag matrix", () => {
+  const payloads = [
+    "hello\\nworld",
+    "tab\\there",
+    "\\x41\\x42",
+    "\\0101",
+    "no\\cstop",
+  ]
+
+  payloads.forEach(payload => {
+    it(`xpgEcho=true  "${payload.replace(/\\/g, "\\\\")}"`, async () => {
+      const impl = await executeEcho([payload], { xpgEcho: true })
+      const bash = bashEcho(["-e", payload])
+      expect(impl.stdout).toBe(bash.stdout)
+    })
+
+    it(`xpgEcho=true overridden by -E  "${payload.replace(/\\/g, "\\\\")}"`, async () => {
+      const impl = await executeEcho(["-E", payload], { xpgEcho: true })
+      const bash = bashEcho(["-E", payload])
+      expect(impl.stdout).toBe(bash.stdout)
+    })
+
+    it(`xpgEcho=false with -e  "${payload.replace(/\\/g, "\\\\")}"`, async () => {
+      const impl = await executeEcho(["-e", payload], { xpgEcho: false })
+      const bash = bashEcho(["-e", payload])
+      expect(impl.stdout).toBe(bash.stdout)
+    })
+  })
+})
+
+describe("generated — high-byte / wrap-around octal", () => {
+  // Values that wrap around 0xFF
+  const octals = [
+    "0377", // 255 → ÿ
+    "0400", // 256 → 0 (NUL)
+    "0401", // 257 → 1 (SOH)
+    "0777", // 511 → 255 (same as 0377)
+    "01000", // 512 → 0 (NUL) + literal '0'
+  ]
+
+  octals.forEach(seq => {
+    it(`octal \\\\${seq}`, () => matchesBash(["-e", `\\${seq}`]))
+  })
+})
+
+describe("generated — mixed escape soup", () => {
+  const soups = [
+    "a\\nb\\tc\\rd\\ve\\ff",
+    "\\x48\\x65\\x6c\\x6c\\x6f", // "Hello"
+    "\\0102\\0101\\0103\\0104", // "BASH"
+    "\\n\\r\\t\\a\\b\\v\\f\\e\\E\\\\",
+    "price: \\x24\\x31\\x30",   // "$10"
+    "ctrl-c\\cignored",
+    "line1\\n\\nline3\\n\\n\\nline6",
+    "\\0\\00\\000\\0000",       // NUL variants
+  ]
+
+  soups.forEach((soup, idx) => {
+    it(`soup #${idx + 1}`, () => matchesBash(["-e", soup]))
+  })
+})
