@@ -195,7 +195,8 @@ function bashTrap(args) {
   }
 
   const { stdout, stderr, status } = spawnSync('bash', ['-c', script], {
-    encoding: 'utf8'
+    encoding: 'utf8',
+    stdio: ['pipe', 'pipe', 'ignore']   // <‑‑ ignore stderr
   });
 
   return { stdout: stdout.trim(), stderr: stderr.trim(), exitCode: status };
