@@ -16,61 +16,61 @@ const mockFsState = {
   '/unexecutable': { type: 'regular', exists: true, r: true, w: true, x: false, size: 1 },
 };
 
-function getFileStat(pathname) {
-  return mockFsState[pathname] || { exists: false };
+function getFileStatResolved(pathname, followSymlinks = true) {
+  let stat = mockFsState[pathname] || { exists: false };
+  if (followSymlinks) {
+    let visited = new Set();
+    while (stat.exists && stat.type === 'symlink') {
+      if (visited.has(pathname)) return { exists: false };
+      visited.add(pathname);
+      pathname = stat.target;
+      stat = mockFsState[pathname] || { exists: false };
+    }
+  }
+  return stat;
 }
 
 function tryParseInt(str) {
-  const num = parseInt(str, 10);
-  return isNaN(num) ? null : num;
+  if (typeof str !== 'string' || !/^[+-]?\d+$/.test(str.trim())) {
+    return null;
+  }
+  return parseInt(str, 10);
 }
 
 function testCommand(argv) {
   let args = [...argv];
   let isBracketForm = false;
 
-  // Handle '[' variant
   if (args.length > 0 && args[0] === '[') {
     isBracketForm = true;
-    args.shift(); // remove '['
+    args.shift();
     if (args.length === 0 || args[args.length - 1] !== ']') {
-      return 1; // Mismatched brackets or missing closing bracket
+      return 1;
     }
-    args.pop(); // remove ']'
+    args.pop();
   }
 
-  // Handle special cases: `test ]` and `test ! ]` (not part of `[` form)
   if (!isBracketForm) {
-    if (args.length === 1 && args[0] === ']') {
-      return 0; // test ] -> true
-    }
-    if (args.length === 2 && args[0] === '!' && args[1] === ']') {
-      return 1; // test ! ] -> false
-    }
+    if (args.length === 1 && args[0] === ']') return 0;
+    if (args.length === 2 && args[0] === '!' && args[1] === ']') return 1;
   }
 
-  // --- Recursive evaluation helper for fixed-argument cases and sub-expressions ---
   function _evaluateFixedArgc(tokens) {
     const currentArgc = tokens.length;
 
     if (currentArgc === 0) {
       return false;
     } else if (currentArgc === 1) {
-      const arg = tokens[0];
-      const unaryOperators = new Set(['!', '-b', '-c', '-d', '-e', '-f', '-g', '-h', '-L', '-n', '-p', '-r', '-S', '-s', '-t', '-u', '-w', '-x', '-z']);
-      // If the single argument is a known unary operator, it implies a missing operand.
-      if (unaryOperators.has(arg)) {
-          return false; // Missing operand for a unary primary or negation
-      }
-      // Otherwise, it's a simple string test: true if non-empty, false if empty.
-      return arg.length > 0;
+      // POSIX standard: single non-null argument is ALWAYS true, even if it looks like an operator.
+      return tokens[0].length > 0;
     } else if (currentArgc === 2) {
       const op = tokens[0];
       const operand = tokens[1];
       if (op === '!') {
         return !_evaluateFixedArgc([operand]);
       }
-      const stat = getFileStat(operand);
+      const followSymlinks = !(op === '-h' || op === '-L');
+      const stat = getFileStatResolved(operand, followSymlinks);
       switch (op) {
         case '-n': return operand.length > 0;
         case '-z': return operand.length === 0;
@@ -89,8 +89,8 @@ function testCommand(argv) {
         case '-L': return stat.type === 'symlink';
         case '-g': return stat.exists && stat.g;
         case '-u': return stat.exists && stat.u;
-        case '-t': return tryParseInt(operand) === 0; // File descriptor 0 assumed terminal
-        default: return false; // Unspecified results
+        case '-t': return tryParseInt(operand) === 0;
+        default: return false;
       }
     } else if (currentArgc === 3) {
       const arg1 = tokens[0];
@@ -101,14 +101,18 @@ function testCommand(argv) {
         const result = (arg1 === arg2);
         return (op === '=') ? result : !result;
       }
-      if (arg1 === '!') {
-        return !_evaluateFixedArgc([op, arg2]); // Negate 2-arg test of (op, arg2)
+      if (op === '-a' || op === '-o') {
+        const left = _evaluateFixedArgc([arg1]);
+        const right = _evaluateFixedArgc([arg2]);
+        return (op === '-a') ? (left && right) : (left || right);
       }
-      if (arg1 === '(' && arg2 === ')') { // XSI specific: ( expression )
-        return _evaluateFixedArgc([op]); // op is the expression
+      if (arg1 === '!') {
+        return !_evaluateFixedArgc([op, arg2]);
+      }
+      if (arg1 === '(' && arg2 === ')') {
+        return _evaluateFixedArgc([op]);
       }
 
-      // Integer comparisons
       const num1 = tryParseInt(arg1);
       const num2 = tryParseInt(arg2);
       if (num1 !== null && num2 !== null) {
@@ -119,10 +123,10 @@ function testCommand(argv) {
           case '-ge': return num1 >= num2;
           case '-lt': return num1 < num2;
           case '-le': return num1 <= num2;
-          default: return false; // Unknown binary operator
+          default: return false;
         }
       }
-      return false; // Unspecified results
+      return false;
     } else if (currentArgc === 4) {
       const arg1 = tokens[0];
       const arg2 = tokens[1];
@@ -130,41 +134,32 @@ function testCommand(argv) {
       const arg4 = tokens[3];
 
       if (arg1 === '!') {
-        return !_evaluateFixedArgc([arg2, arg3, arg4]); // Negate 3-arg test
+        return !_evaluateFixedArgc([arg2, arg3, arg4]);
       }
-      if (arg1 === '(' && arg4 === ')') { // XSI specific: ( expr1 expr2 )
+      if (arg1 === '(' && arg4 === ')') {
         return _evaluateFixedArgc([arg2, arg3]);
       }
-      return false; // Unspecified results
+      return false;
     }
-    return null; // Indicates this argc was not handled by fixed rules, proceed to XSI parser
+    return null;
   }
 
-  // --- XSI-compliant expression parser for >4 arguments ---
-  // This handles precedence for -a, -o, comparisons, and nested parentheses.
+  // --- Main parser for >4 arguments ---
   let currentTokenIndex = 0;
   function getNextToken() { return args[currentTokenIndex]; }
   function consume() { return args[currentTokenIndex++]; }
   function hasMoreTokens() { return currentTokenIndex < args.length; }
 
-  // Parses literals, unary ops (!, -n, -z, file tests), or parenthesized expressions.
-  // Returns a boolean for unary expressions, or the literal string for comparisons.
   function parseLiteralOrUnary() {
     if (!hasMoreTokens()) return false;
-
     const token = getNextToken();
 
-    if (token === '!') {
-      consume(); // !
-      return !parseLiteralOrUnary();
-    }
-    
-    // Unary file primaries and string length tests
     if (token.startsWith('-') && token.length === 2) {
-      consume(); // Consume op
-      if (!hasMoreTokens()) return false; // Missing operand
+      consume();
+      if (!hasMoreTokens()) return false;
       const operand = consume();
-      const stat = getFileStat(operand);
+      const followSymlinks = !(token === '-h' || token === '-L');
+      const stat = getFileStatResolved(operand, followSymlinks);
       switch (token) {
         case '-n': return operand.length > 0;
         case '-z': return operand.length === 0;
@@ -179,52 +174,46 @@ function testCommand(argv) {
         case '-c': return stat.type === 'character';
         case '-p': return stat.type === 'fifo';
         case '-S': return stat.type === 'socket';
-        case '-h': // fallthrough
+        case '-h':
         case '-L': return stat.type === 'symlink';
         case '-g': return stat.exists && stat.g;
         case '-u': return stat.exists && stat.u;
         case '-t': return tryParseInt(operand) === 0;
-        default: return false; // Unknown unary
+        default: return false;
       }
     }
-    
-    // Parentheses for grouping
+
     if (token === '(') {
-      consume(); // (
+      consume();
       const result = parseXSIExpression();
-      if (getNextToken() !== ')') {
-        return false; // Mismatched parenthesis
-      }
-      consume(); // )
+      if (getNextToken() !== ')') return false;
+      consume();
       return result;
     }
 
-    // Literal string operand (for comparisons or single-string truthiness)
-    consume(); // Consume the literal
+    consume();
     return token;
   }
 
-  // Handles string and integer comparison operators (higher precedence than -a, -o)
   function parseComparisonXSI() {
     let left = parseLiteralOrUnary();
-
     while (hasMoreTokens()) {
       const op = getNextToken();
       if (['=', '!=', '-eq', '-ne', '-gt', '-ge', '-lt', '-le'].includes(op)) {
-        consume(); // Consume op
-        if (!hasMoreTokens()) return false; // Missing right operand
+        consume();
+        if (!hasMoreTokens()) return false;
         let right = parseLiteralOrUnary();
-
         let result;
         if (op === '=' || op === '!=') {
-          result = (left === right);
+          // Explicit string coercion resolves mixed subexpressions gracefully
+          const strLeft = String(left);
+          const strRight = String(right);
+          result = (strLeft === strRight);
           left = (op === '=') ? result : !result;
-        } else { // Integer comparison
+        } else {
           const num1 = tryParseInt(left);
           const num2 = tryParseInt(right);
-          if (num1 === null || num2 === null) {
-            return false; // Non-numeric for integer comparison
-          }
+          if (num1 === null || num2 === null) return false;
           switch (op) {
             case '-eq': result = num1 === num2; break;
             case '-ne': result = num1 !== num2; break;
@@ -237,49 +226,51 @@ function testCommand(argv) {
           left = result;
         }
       } else {
-        break; // Not a comparison operator
+        break;
       }
     }
     return left;
   }
 
-  // Handles logical AND operator (-a) (higher precedence than -o)
+  function parseNotXSI() {
+    if (hasMoreTokens() && getNextToken() === '!') {
+      consume();
+      return !parseNotXSI();
+    }
+    return parseComparisonXSI();
+  }
+
   function parseAndXSI() {
-    let left = parseComparisonXSI();
+    let left = parseNotXSI();
     while (hasMoreTokens() && getNextToken() === '-a') {
-      consume(); // -a
-      let right = parseComparisonXSI();
+      consume();
+      let right = parseNotXSI();
       left = left && right;
     }
     return left;
   }
 
-  // Handles logical OR operator (-o) (lowest precedence)
   function parseXSIExpression() {
     let left = parseAndXSI();
     while (hasMoreTokens() && getNextToken() === '-o') {
-      consume(); // -o
+      consume();
       let right = parseAndXSI();
       left = left || right;
     }
     return left;
   }
 
-  // --- Main evaluation flow ---
   const argc = args.length;
   let result;
 
-  // First, try the fixed-argument parsing rules (for 0 to 4 arguments)
   if (argc <= 4) {
     result = _evaluateFixedArgc(args);
   } else {
-    // For >4 arguments, use the XSI expression parser
     result = parseXSIExpression();
   }
 
-  // Check for leftover tokens if XSI parser was used (syntax error)
   if (argc > 4 && currentTokenIndex < args.length) {
-    return 1; // Unspecified / syntax error
+    return 1;
   }
 
   return result ? 0 : 1;
