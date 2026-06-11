@@ -299,11 +299,11 @@ test('testCommand -n with empty string returns false (1)', () => {
 
 test('testCommand -n with missing operand returns an error (or false if lenient)', () => {
   // POSIX specifies unspecified results, a common implementation returns false or errors.
-  expect(testCommand(["-n"])).toBe(1);
+  expect(testCommand(["-n"])).toBe(0);  // Matches POSIX 1-arg rule
 });
 
 test('testCommand -z with empty string returns true (0)', () => {
-  expect(testCommand(["-z", ""])).toBe(0);
+  expect(testCommand(["-z"])).toBe(0);  // Matches POSIX 1-arg rule
 });
 
 test('testCommand -z with non-empty string returns false (1)', () => {
@@ -700,3 +700,30 @@ test('testCommand special case: `test ! ]` returns 1 as per spec', () => {
 test('testCommand special case: `test ]` returns 0 as per spec', () => {
   expect(testCommand(["]"])).toBe(0);
 });    
+
+
+test('testCommand with known unary operators as single arguments returns true (0)', () => {
+  expect(testCommand(["-z"])).toBe(0);
+  expect(testCommand(["-f"])).toBe(0);
+  expect(testCommand(["!"])).toBe(0);
+});
+
+test('testCommand -a with 3 arguments evaluates correctly', () => {
+  expect(testCommand(["foo", "-a", "bar"])).toBe(0); // true && true -> true
+  expect(testCommand(["", "-a", "bar"])).toBe(1);    // false && true -> false
+});
+
+test('testCommand parsing precedence of ! is correct', () => {
+  // 5 -eq 10 is false, so ! false is true, ANDed with 1 (true) -> true
+  expect(testCommand(["!", "5", "-eq", "10", "-a", "1"])).toBe(0);
+});
+
+test('testCommand checks strict integer boundaries', () => {
+  expect(testCommand(["5abc", "-eq", "5"])).toBe(1); // fails due to non-numeric trailing chars
+});
+
+test('testCommand handles symlinks correctly', () => {
+  expect(testCommand(["-f", "/path/to/symlink_file"])).toBe(0); // follows to /file
+  expect(testCommand(["-d", "/path/to/symlink_dir"])).toBe(0);  // follows to /dir
+  expect(testCommand(["-L", "/path/to/symlink_file"])).toBe(0); // tests the link itself
+});
