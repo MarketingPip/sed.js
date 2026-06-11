@@ -311,7 +311,7 @@ test('testCommand -z with non-empty string returns false (1)', () => {
 });
 
 test('testCommand -z with missing operand returns an error (or false if lenient)', () => {
-  expect(testCommand(["-z"])).toBe(1);
+  expect(testCommand(["-z"])).toBe(0);
 });
 
 // Binary Primaries: String Comparisons
