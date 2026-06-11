@@ -22,6 +22,10 @@ import { spawnSync } from 'child_process';
 // - When printing: integers use mpz_out_str (canonical form),
 //   strings use the raw value as-is
 // - null() checks: integer → value == 0; string → empty or all zeros
+//
+// Integer arithmetic: uses BigInt throughout to match GNU expr's
+// intmax_t (64-bit) range exactly.  Values are stored as decimal
+// strings; BigInt is only instantiated during arithmetic/comparison.
 
 export function exprEval(args) {
   if (!Array.isArray(args) || args.length === 0) throw new Error('syntax error');
@@ -35,7 +39,14 @@ export function exprEval(args) {
   const done = () => pos >= args.length;
 
   const isIntStr = (s) => /^-?\d+$/.test(String(s));
-  const toInt = (s) => { if (!isIntStr(s)) throw new Error('non-integer argument'); return parseInt(s, 10); };
+
+  // toInt: used by substr/index where we need a JS number for string indexing.
+  // Validates integer syntax first, then converts via BigInt to catch non-integers
+  // cleanly, then returns Number (safe for string lengths up to 2^53-1).
+  const toInt = (s) => {
+    if (!isIntStr(s)) throw new Error('non-integer argument');
+    return Number(BigInt(s));
+  };
 
   // Check if a string value is "null" (empty or all zeros like "00", "-0")
   const isNullString = (s) => {
@@ -47,10 +58,13 @@ export function exprEval(args) {
     return true;
   };
 
-  // Check if a value is null/zero
-  const isNull = (v) => v.type === 'integer' ? parseInt(v.value, 10) === 0 : isNullString(v.value);
+  // Check if a value is null/zero.
+  // Integer values are stored canonically (BigInt stringified), so "0" is the
+  // only zero form for integer type.  String values may be "-0", "00", etc.
+  const isNull = (v) => v.type === 'integer' ? v.value === '0' : isNullString(v.value);
 
-  // Create an integer value (always canonicalized: no leading zeros, -0 → 0)
+  // Create an integer value.  Always pass a BigInt so String() canonicalises it
+  // (no leading zeros, and -0n → "0").
   const intValue = (n) => ({ type: 'integer', value: String(n) });
 
   // Create a string value (raw, from command line token)
@@ -62,19 +76,23 @@ export function exprEval(args) {
     return v;
   };
 
-  // Coerce value to integer for arithmetic operations
+  // Coerce value to BigInt for arithmetic.  Using BigInt instead of Number
+  // matches GNU expr's intmax_t range and avoids silent precision loss for
+  // values beyond Number.MAX_SAFE_INTEGER (2^53 - 1).
   const toInteger = (v) => {
-    if (v.type === 'integer') return parseInt(v.value, 10);
-    if (!isIntStr(v.value)) throw new Error('non-integer argument');
-    return parseInt(v.value, 10);
+    const s = v.type === 'integer' ? v.value : v.value;
+    if (!isIntStr(s)) throw new Error('non-integer argument');
+    return BigInt(s);
   };
 
   const cmp = (op, l, r) => {
-    const lStr = l.type === 'string' ? l.value : l.value;
-    const rStr = r.type === 'string' ? r.value : r.value;
+    const lStr = l.value;
+    const rStr = r.value;
+    // Use numeric comparison only when BOTH sides are integer strings.
+    // Uses BigInt to handle large values correctly.
     const numeric = isIntStr(lStr) && isIntStr(rStr);
-    const lv = numeric ? parseInt(lStr, 10) : lStr;
-    const rv = numeric ? parseInt(rStr, 10) : rStr;
+    const lv = numeric ? BigInt(lStr) : lStr;
+    const rv = numeric ? BigInt(rStr) : rStr;
     switch (op) {
       case '=':  return lv === rv;
       case '!=': return lv !== rv;
@@ -95,7 +113,7 @@ export function exprEval(args) {
       if (isNull(left)) {
         // Left is null — take right. If right is also null, return integer 0.
         if (isNull(r)) {
-          left = intValue(0);
+          left = intValue(0n);
         } else {
           left = r;
         }
@@ -111,7 +129,7 @@ export function exprEval(args) {
       next();
       const r = parseCmp();
       if (isNull(left) || isNull(r)) {
-        left = intValue(0);
+        left = intValue(0n);
       }
       // else: both truthy, keep left unchanged
     }
@@ -124,7 +142,7 @@ export function exprEval(args) {
     while (OPS.has(peek())) {
       const op = next();
       const r = parseAdd();
-      left = intValue(cmp(op, left, r) ? 1 : 0);
+      left = intValue(cmp(op, left, r) ? 1n : 0n);
     }
     return left;
   }
@@ -148,9 +166,10 @@ export function exprEval(args) {
       const r = parseMatch();
       const lNum = toInteger(left);
       const rNum = toInteger(r);
-      if (rNum === 0 && (op === '/' || op === '%')) throw new Error('division by zero');
+      if (rNum === 0n && (op === '/' || op === '%')) throw new Error('division by zero');
+      // BigInt division truncates toward zero, matching C intmax_t / behaviour.
       if (op === '*') left = intValue(lNum * rNum);
-      if (op === '/') left = intValue(Math.trunc(lNum / rNum));
+      if (op === '/') left = intValue(lNum / rNum);
       if (op === '%') left = intValue(lNum % rNum);
     }
     return left;
@@ -161,6 +180,10 @@ export function exprEval(args) {
   //   \+ \? \{ \} \| → quantifiers/alternation
   //   bare ( ) → escaped literals \( \)
   //   bare + ? { } | → escaped literals (literal in BRE, special in JS ERE)
+  //
+  // NOTE: BRE interval expressions \{n,m\} are translated to JS {n,m} here,
+  // but support depends on the JS engine's regex implementation.  They are
+  // accepted but not exhaustively tested.
   function breToJs(pat) {
     let out = '', i = 0;
     while (i < pat.length) {
@@ -192,11 +215,11 @@ export function exprEval(args) {
       try { re = new RegExp('^' + breToJs(pattern)); } catch { throw new Error('invalid regex'); }
       const m = leftStr.match(re);
       if (!m) {
-        left = hasCaptureGroup ? strValue('') : intValue(0);
+        left = hasCaptureGroup ? strValue('') : intValue(0n);
       } else if (m[1] !== undefined) {
         left = strValue(m[1]);
       } else {
-        left = intValue(m[0].length);
+        left = intValue(BigInt(m[0].length));
       }
     }
     return left;
@@ -217,14 +240,22 @@ export function exprEval(args) {
     }
 
     if (tok === 'length') {
-      const str = next();
-      if (str === undefined) throw new Error('syntax error');
-      return intValue(str.length);
+      // GNU expr: `length` recursively parses its argument as a primary expression,
+      // not merely the next raw token.  This means `expr length length abc` evaluates
+      // as length(length("abc")) = length(3) = 1, and `expr length length` (with no
+      // further argument) is a syntax error — matching real expr behaviour.
+      const operand = parsePrimary();
+      return intValue(BigInt(toStringVal(operand).value.length));
     }
 
     if (tok === 'substr') {
-      const str = next(), rawPos = next(), rawLen = next();
-      if (str === undefined || rawPos === undefined || rawLen === undefined) throw new Error('syntax error');
+      // Arguments are also primaries (same recursive rule as `length`).
+      const strOp  = parsePrimary();
+      const posOp  = parsePrimary();
+      const lenOp  = parsePrimary();
+      const str    = toStringVal(strOp).value;
+      const rawPos = toStringVal(posOp).value;
+      const rawLen = toStringVal(lenOp).value;
       const p = toInt(rawPos), l = toInt(rawLen);
       // POSIX: pos < 1 yields empty string
       if (p < 1) return strValue('');
@@ -232,12 +263,15 @@ export function exprEval(args) {
     }
 
     if (tok === 'index') {
-      const str = next(), chars = next();
-      if (str === undefined || chars === undefined) throw new Error('syntax error');
+      // Arguments are also primaries (same recursive rule).
+      const strOp   = parsePrimary();
+      const charsOp = parsePrimary();
+      const str     = toStringVal(strOp).value;
+      const chars   = toStringVal(charsOp).value;
       for (let j = 0; j < str.length; j++) {
-        if (chars.includes(str[j])) return intValue(j + 1);
+        if (chars.includes(str[j])) return intValue(BigInt(j + 1));
       }
-      return intValue(0);
+      return intValue(0n);
     }
 
     return strValue(tok);
@@ -844,4 +878,130 @@ describe('generated — large number stress', () => {
   cases.forEach(({ args, desc }) => {
     it(desc, async () => expectSameExpr({ args }));
   });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// NEW TESTS — Targeted coverage for previously-unverified edge cases
+// ═════════════════════════════════════════════════════════════════════════════
+
+// ─────────────────────────────────────────────
+// 1. Integer overflow / large value correctness (BigInt)
+//
+// These values exceed Number.MAX_SAFE_INTEGER (2^53-1 = 9007199254740991).
+// Before the BigInt fix, arithmetic on these would silently lose precision.
+// Now we verify against the system oracle exactly as with all other tests.
+// ─────────────────────────────────────────────
+describe('large integers beyond Number.MAX_SAFE_INTEGER', () => {
+  // 2^53 - 1 is the last exactly-representable JS Number
+  const MAX_SAFE  = '9007199254740991';
+  const OVER_SAFE = '9007199254740992'; // 2^53, first value that loses precision as Number
+  const BIG       = '9999999999999999'; // 16 nines
+
+  it('MAX_SAFE_INTEGER + 0 round-trips correctly',   async () => expectSameExpr({ args: [MAX_SAFE,  '+', '0'] }));
+  it('MAX_SAFE_INTEGER + 1 does not wrap or lose',   async () => expectSameExpr({ args: [MAX_SAFE,  '+', '1'] }));
+  it('OVER_SAFE + 0 round-trips',                    async () => expectSameExpr({ args: [OVER_SAFE, '+', '0'] }));
+  it('OVER_SAFE + 1',                                async () => expectSameExpr({ args: [OVER_SAFE, '+', '1'] }));
+  it('OVER_SAFE - 1',                                async () => expectSameExpr({ args: [OVER_SAFE, '-', '1'] }));
+  it('BIG + 1',                                      async () => expectSameExpr({ args: [BIG,       '+', '1'] }));
+  it('BIG * 2',                                      async () => expectSameExpr({ args: [BIG,       '*', '2'] }));
+  it('BIG / 3 truncates correctly',                  async () => expectSameExpr({ args: [BIG,       '/', '3'] }));
+  it('BIG % 7',                                      async () => expectSameExpr({ args: [BIG,       '%', '7'] }));
+  it('BIG = BIG (equality)',                         async () => expectSameExpr({ args: [BIG,       '=',  BIG] }));
+  it('BIG > MAX_SAFE',                               async () => expectSameExpr({ args: [BIG,       '>',  MAX_SAFE] }));
+  it('negative BIG + BIG = 0',                       async () => expectSameExpr({ args: ['-' + BIG, '+', BIG] }));
+
+  // INT64 boundaries (intmax_t on 64-bit systems)
+  it('INT64_MAX + 0',  async () => expectSameExpr({ args: ['9223372036854775807',  '+', '0'] }));
+  it('INT64_MIN + 0',  async () => expectSameExpr({ args: ['-9223372036854775808', '+', '0'] }));
+});
+
+// ─────────────────────────────────────────────
+// 2. Keyword recursive primary parsing
+//
+// GNU expr parses `length`/`substr`/`index` arguments as full primary
+// expressions, not raw tokens.  Consequences verified against oracle:
+//
+//   expr length length abc   → length(length("abc")) = length(3) = 1
+//   expr length length       → inner length has no arg → syntax error
+//   expr foo | length        → | is NOT short-circuited at parse level;
+//                              length still needs an arg → syntax error
+//   expr length ( abc )      → recursive: length(eval_paren(abc)) = 3
+// ─────────────────────────────────────────────
+describe('keyword recursive primary parsing', () => {
+  // Recursive evaluation: outer length's arg is inner length's result
+  it('length length abc = 1  (length of "3")',    async () => expectSameExpr({ args: ['length', 'length', 'abc'] }));
+  it('length length "hello" = 1  (length of "5")',async () => expectSameExpr({ args: ['length', 'length', 'hello'] }));
+
+  // length with a parenthesised expression as argument
+  it('length ( 2 + 3 ) = 1  (length of "5")',     async () => expectSameExpr({ args: ['length', '(', '2', '+', '3', ')'] }));
+  it('length ( abc ) = 3',                        async () => expectSameExpr({ args: ['length', '(', 'abc', ')'] }));
+
+  // Missing argument: inner keyword consumes nothing → syntax error on both sides
+  it('length length → syntax error (no arg for inner)',  async () => expectSameExpr({ args: ['length', 'length'] }));
+  it('length substr → syntax error (no arg for inner)',  async () => expectSameExpr({ args: ['length', 'substr'] }));
+  it('length index  → syntax error (no arg for inner)',  async () => expectSameExpr({ args: ['length', 'index'] }));
+
+  // | does NOT short-circuit at parse level; length on RHS still needs an arg
+  it('foo | length → syntax error (| not short-circuited)',  async () => expectSameExpr({ args: ['foo', '|', 'length'] }));
+  it('"" | length  → syntax error',                          async () => expectSameExpr({ args: ['', '|', 'length'] }));
+  it('"" | substr  → syntax error',                          async () => expectSameExpr({ args: ['', '|', 'substr'] }));
+  it('"" | index   → syntax error',                          async () => expectSameExpr({ args: ['', '|', 'index'] }));
+
+  // keyword tokens in positions where they are NOT parsed as keywords
+  // (i.e. as RHS of a comparison, where parsePrimary reads them as keywords
+  // and then tries to consume their argument — the next token)
+  it('"foo" = length-as-primary eats next token, leftover = syntax error',
+     async () => expectSameExpr({ args: ['foo', '=', 'length', 'abc'] }));
+
+  // index with paren arg
+  it('index ( abcdef ) c = 3',  async () => expectSameExpr({ args: ['index', '(', 'abcdef', ')', 'c'] }));
+
+  // substr with paren args
+  it('substr ( abcdef ) 1 3 = abc', async () => expectSameExpr({ args: ['substr', '(', 'abcdef', ')', '1', '3'] }));
+});
+
+// ─────────────────────────────────────────────
+// 3. -0 and zero-string truthiness
+//
+// isNullString treats "-0", "00", "-00" as null/falsy because they are
+// all-zero digit sequences.  Verify against oracle so behaviour is pinned
+// and any future GNU expr change in this corner is caught immediately.
+// ─────────────────────────────────────────────
+describe('zero-string and -0 truthiness / falsiness', () => {
+  // "-0" as a raw string token (type:string, not type:integer)
+  it('"-0" as literal — success?',       async () => expectSameExpr({ args: ['-0'] }));
+  it('"-0" | 5',                         async () => expectSameExpr({ args: ['-0', '|', '5'] }));
+  it('"-0" & 1',                         async () => expectSameExpr({ args: ['-0', '&', '1'] }));
+  it('"-0" = "0"',                       async () => expectSameExpr({ args: ['-0', '=', '0'] }));
+  it('"-0" = "-0"',                      async () => expectSameExpr({ args: ['-0', '=', '-0'] }));
+
+  // "00" — multiple zero digits (string type, truthy in some expr versions)
+  it('"00" as literal',                  async () => expectSameExpr({ args: ['00'] }));
+  it('"00" | 5',                         async () => expectSameExpr({ args: ['00', '|', '5'] }));
+  it('"00" & 1',                         async () => expectSameExpr({ args: ['00', '&', '1'] }));
+
+  // "-00" — negative all-zeros
+  it('"-00" as literal',                 async () => expectSameExpr({ args: ['-00'] }));
+  it('"-00" | 5',                        async () => expectSameExpr({ args: ['-00', '|', '5'] }));
+
+  // Arithmetic result of 0 (integer type) must be falsy
+  it('1 - 1 = 0 (integer zero, falsy)', async () => expectSameExpr({ args: ['1', '-', '1'] }));
+  it('-1 + 1 = 0 (integer zero, falsy)',async () => expectSameExpr({ args: ['-1', '+', '1'] }));
+});
+
+// ─────────────────────────────────────────────
+// 4. BRE interval quantifiers \{n,m\}
+//
+// These are valid BRE syntax and breToJs translates \{…\} → {…} for JS.
+// Basic smoke tests; edge cases around unsupported forms are also included.
+// ─────────────────────────────────────────────
+describe('BRE interval quantifiers \\{n,m\\}', () => {
+  it('a\\{3\\} matches exactly 3 a',       async () => expectSameExpr({ args: ['aaa',  ':', 'a\\{3\\}'] }));
+  it('a\\{3\\} no match on 2 a',           async () => expectSameExpr({ args: ['aa',   ':', 'a\\{3\\}'] }));
+  it('a\\{2,3\\} matches 2 a',             async () => expectSameExpr({ args: ['aa',   ':', 'a\\{2,3\\}'] }));
+  it('a\\{2,3\\} matches 3 a',             async () => expectSameExpr({ args: ['aaa',  ':', 'a\\{2,3\\}'] }));
+  it('a\\{2,3\\} does not over-match',     async () => expectSameExpr({ args: ['aaaa', ':', 'a\\{2,3\\}'] }));
+  it('[0-9]\\{4\\} matches 4 digits',      async () => expectSameExpr({ args: ['1234', ':', '[0-9]\\{4\\}'] }));
+  it('[0-9]\\{4\\} no match on 3 digits',  async () => expectSameExpr({ args: ['123',  ':', '[0-9]\\{4\\}'] }));
+  it('capture with interval',              async () => expectSameExpr({ args: ['aaa',  ':', '\\(a\\{3\\}\\)'] }));
 });
