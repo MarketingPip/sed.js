@@ -1,6 +1,5 @@
 import { execFileSync } from 'child_process';
 
-
 function tr(argvOrString, input = "") {
   let argv;
   if (typeof argvOrString === 'string') {
@@ -71,11 +70,10 @@ function tr(argvOrString, input = "") {
   }
 
   function expandSetInternal(setStr, isSet2 = false, allowDynamicRepeat = false) {
-    const segments = [];
-    let hasInfiniteRepeat = false;
-    let infiniteRepeatChar = null;
+    const tokens = [];
     let i = 0;
 
+    // --- Tokenizer Pass ---
     while (i < setStr.length) {
       const char = setStr[i];
 
@@ -83,118 +81,155 @@ function tr(argvOrString, input = "") {
         i++;
         if (i >= setStr.length) throw new Error('Unterminated escape sequence.');
         const escapeResult = parseEscapeSequence(setStr, i);
-        segments.push({ type: 'bytes', bytes: [escapeResult.value] });
+        tokens.push({ type: 'char', value: escapeResult.value });
         i += escapeResult.length;
         continue;
       }
 
       if (char === '[') {
         const closeBracketIndex = setStr.indexOf(']', i);
-        if (closeBracketIndex === -1) {
-          throw new Error('Unterminated character class, repeat, or equivalence class.');
-        }
-        const innerContent = setStr.substring(i + 1, closeBracketIndex);
+        if (closeBracketIndex !== -1) {
+          const innerContent = setStr.substring(i + 1, closeBracketIndex);
 
-        if (innerContent.startsWith(':') && innerContent.endsWith(':')) {
-          const className = innerContent.substring(1, innerContent.length - 1);
-          if (!CHAR_CLASSES[className]) {
-            throw new Error(`Unknown character class: [:${className}:]`);
+          if (innerContent.startsWith(':') && innerContent.endsWith(':')) {
+            const className = innerContent.substring(1, innerContent.length - 1);
+            if (!CHAR_CLASSES[className]) {
+              throw new Error(`Unknown character class: [:${className}:]`);
+            }
+            tokens.push({ type: 'class', name: className });
+            i = closeBracketIndex + 1;
+            continue;
           }
-          const classResult = expandSetInternal(CHAR_CLASSES[className]);
-          segments.push({ type: 'bytes', bytes: classResult.bytes });
-          i = closeBracketIndex + 1;
-          continue;
-        }
 
-        if (innerContent.includes('*')) {
-          const parts = innerContent.split('*');
-          if (parts.length !== 2) {
-            throw new Error(`Invalid repeat syntax: [${innerContent}]`);
-          }
-          const charToRepeatStr = parts[0];
-          const repeatCountStr = parts[1];
+          if (innerContent.includes('*')) {
+            const parts = innerContent.split('*');
+            if (parts.length !== 2) {
+              throw new Error(`Invalid repeat syntax: [${innerContent}]`);
+            }
+            const charToRepeatStr = parts[0];
+            const repeatCountStr = parts[1];
 
-          let charCodeToRepeat;
-          if (charToRepeatStr.length === 2 && charToRepeatStr[0] === '\\') {
-            const escapeResult = parseEscapeSequence(charToRepeatStr, 1);
-            if (escapeResult.length > 1 && !(charToRepeatStr[1] >= '0' && charToRepeatStr[1] <= '7' && escapeResult.length <= 3)) {
+            let charCodeToRepeat;
+            if (charToRepeatStr.length === 2 && charToRepeatStr[0] === '\\') {
+              const escapeResult = parseEscapeSequence(charToRepeatStr, 1);
+              if (escapeResult.length > 1 && !(charToRepeatStr[1] >= '0' && charToRepeatStr[1] <= '7' && escapeResult.length <= 3)) {
+                throw new Error(`Invalid char in repeat syntax: [${charToRepeatStr}*${repeatCountStr}] must be a single character or simple escape.`);
+              }
+              charCodeToRepeat = escapeResult.value;
+            } else if (charToRepeatStr.length === 1) {
+              charCodeToRepeat = charToRepeatStr.charCodeAt(0);
+            } else {
               throw new Error(`Invalid char in repeat syntax: [${charToRepeatStr}*${repeatCountStr}] must be a single character or simple escape.`);
             }
-            charCodeToRepeat = escapeResult.value;
-          } else if (charToRepeatStr.length === 1) {
-            charCodeToRepeat = charToRepeatStr.charCodeAt(0);
-          } else {
-            throw new Error(`Invalid char in repeat syntax: [${charToRepeatStr}*${repeatCountStr}] must be a single character or simple escape.`);
+
+            let repeatCount = null;
+            if (repeatCountStr !== '') {
+              const count = parseInt(repeatCountStr, 10);
+              if (isNaN(count) || count < 0) {
+                throw new Error(`Invalid repeat count in [${innerContent}]`);
+              }
+              repeatCount = count;
+            }
+            tokens.push({ type: 'repeat', char: charCodeToRepeat, count: repeatCount });
+            i = closeBracketIndex + 1;
+            continue;
           }
 
-          if (repeatCountStr === '') {
-            if (!isSet2) {
-              throw new Error('the [c*] repeat construct may not appear in string1');
+          if (innerContent.startsWith('=') && innerContent.endsWith('=')) {
+            const eqChar = innerContent.substring(1, innerContent.length - 1);
+            if (eqChar.length !== 1) {
+              throw new Error(`Invalid equivalence class: [=${eqChar}=]`);
             }
-            if (!allowDynamicRepeat) {
-              throw new Error('the [c*] construct may appear in string2 only when translating');
-            }
-            if (hasInfiniteRepeat) {
-              throw new Error('only one [c*] repeat construct may appear in string2');
-            }
-            hasInfiniteRepeat = true;
-            infiniteRepeatChar = charCodeToRepeat;
-            segments.push({ type: 'dynamic', char: charCodeToRepeat });
-          } else {
-            const count = parseInt(repeatCountStr, 10);
-            if (isNaN(count) || count < 0) {
-              throw new Error(`Invalid repeat count in [${innerContent}]`);
-            }
-            if (!isSet2) {
-              throw new Error('the [c*] repeat construct may not appear in string1');
-            }
-            if (count === 0) {
-              if (!allowDynamicRepeat) {
-                throw new Error('the [c*] construct may appear in string2 only when translating');
-              }
-              if (hasInfiniteRepeat) {
-                throw new Error('only one [c*] repeat construct may appear in string2');
-              }
-              hasInfiniteRepeat = true;
-              infiniteRepeatChar = charCodeToRepeat;
-              segments.push({ type: 'dynamic', char: charCodeToRepeat });
-            } else {
-              const repeatedBytes = [];
-              for (let k = 0; k < count; k++) {
-                repeatedBytes.push(charCodeToRepeat);
-              }
-              segments.push({ type: 'bytes', bytes: repeatedBytes });
-            }
+            tokens.push({ type: 'equiv', char: eqChar.charCodeAt(0) });
+            i = closeBracketIndex + 1;
+            continue;
           }
-          i = closeBracketIndex + 1;
-          continue;
-        }
-
-        if (innerContent.startsWith('=') && innerContent.endsWith('=')) {
-          const eqChar = innerContent.substring(1, innerContent.length - 1);
-          if (eqChar.length !== 1) {
-            throw new Error(`Invalid equivalence class: [=${eqChar}=]`);
-          }
-          segments.push({ type: 'bytes', bytes: [eqChar.charCodeAt(0)] });
-          i = closeBracketIndex + 1;
-          continue;
         }
       }
 
-      if (i + 1 < setStr.length && setStr[i + 1] === '-' && i + 2 < setStr.length) {
-        const startChar = char;
-        const endChar = setStr[i + 2];
-        if (startChar === '\\' || endChar === '\\') {
-          throw new Error(`Escape sequences are not permitted as range boundaries: ${setStr.substring(i, i+3)}`);
-        }
-        const expanded = expandRange(startChar, endChar);
-        segments.push({ type: 'bytes', bytes: expanded });
-        i += 3;
+      if (char === '-') {
+        tokens.push({ type: 'hyphen' });
+        i++;
         continue;
       }
 
-      segments.push({ type: 'bytes', bytes: [char.charCodeAt(0)] });
+      tokens.push({ type: 'char', value: char.charCodeAt(0) });
       i++;
+    }
+
+    // --- Parser/Expansion Pass ---
+    const segments = [];
+    let hasInfiniteRepeat = false;
+    let infiniteRepeatChar = null;
+    let t = 0;
+
+    while (t < tokens.length) {
+      // Safely resolves ranges with literal OR escaped boundaries
+      if (tokens[t].type === 'char' && t + 1 < tokens.length && tokens[t+1].type === 'hyphen' && t + 2 < tokens.length && tokens[t+2].type === 'char') {
+        const startCode = tokens[t].value;
+        const endCode = tokens[t+2].value;
+        const expanded = expandRange(String.fromCharCode(startCode), String.fromCharCode(endCode));
+        segments.push({ type: 'bytes', bytes: expanded });
+        t += 3;
+        continue;
+      }
+
+      if (tokens[t].type === 'class') {
+        const className = tokens[t].name;
+        const classResult = expandSetInternal(CHAR_CLASSES[className]);
+        segments.push({ type: 'bytes', bytes: classResult.bytes });
+        t++;
+        continue;
+      }
+
+      if (tokens[t].type === 'repeat') {
+        const charCodeToRepeat = tokens[t].char;
+        const repeatCount = tokens[t].count;
+
+        if (repeatCount === null || repeatCount === 0) {
+          if (!isSet2) {
+            throw new Error('the [c*] repeat construct may not appear in string1');
+          }
+          if (!allowDynamicRepeat) {
+            throw new Error('the [c*] construct may appear in string2 only when translating');
+          }
+          if (hasInfiniteRepeat) {
+            throw new Error('only one [c*] repeat construct may appear in string2');
+          }
+          hasInfiniteRepeat = true;
+          infiniteRepeatChar = charCodeToRepeat;
+          segments.push({ type: 'dynamic', char: charCodeToRepeat });
+        } else {
+          if (!isSet2) {
+            throw new Error('the [c*] repeat construct may not appear in string1');
+          }
+          const repeatedBytes = [];
+          for (let k = 0; k < repeatCount; k++) {
+            repeatedBytes.push(charCodeToRepeat);
+          }
+          segments.push({ type: 'bytes', bytes: repeatedBytes });
+        }
+        t++;
+        continue;
+      }
+
+      if (tokens[t].type === 'equiv') {
+        segments.push({ type: 'bytes', bytes: [tokens[t].char] });
+        t++;
+        continue;
+      }
+
+      if (tokens[t].type === 'hyphen') {
+        segments.push({ type: 'bytes', bytes: [45] }); // '-' code is 45
+        t++;
+        continue;
+      }
+
+      if (tokens[t].type === 'char') {
+        segments.push({ type: 'bytes', bytes: [tokens[t].value] });
+        t++;
+        continue;
+      }
     }
 
     const resultBytes = [];
@@ -211,10 +246,16 @@ function tr(argvOrString, input = "") {
   let hasSqueeze = false;
   let hasComplement = false;
   let hasTruncate = false;
+  let endOfOptions = false;
   const positionalArgs = [];
 
+  // --- POSIX/GNU Compliant option parser ---
   for (const arg of argv) {
-    if (arg.startsWith('-')) {
+    if (!endOfOptions && arg === '--') {
+      endOfOptions = true;
+      continue;
+    }
+    if (!endOfOptions && arg.startsWith('-') && arg.length > 1) {
       for (let i = 1; i < arg.length; i++) {
         const option = arg[i];
         if (option === 'd') hasDelete = true;
