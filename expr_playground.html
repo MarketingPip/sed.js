@@ -1,0 +1,914 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>expr-eval Playground</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            mono: ['JetBrains Mono', 'monospace'],
+            sans: ['Inter', 'sans-serif'],
+          },
+          colors: {
+            slate: {
+              850: '#1e293b',
+              900: '#0f172a',
+              950: '#020617',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    .token-tag { color: #f472b6; }
+    .token-string { color: #a5f3fc; }
+    .token-number { color: #fde047; }
+    .token-keyword { color: #c4b5fd; }
+    .token-operator { color: #fca5a5; }
+    .token-comment { color: #6b7280; }
+    .token-paren { color: #94a3b8; }
+    .glow-success { box-shadow: 0 0 20px rgba(34, 197, 94, 0.15); }
+    .glow-error { box-shadow: 0 0 20px rgba(239, 68, 68, 0.15); }
+    .glow-falsy { box-shadow: 0 0 20px rgba(234, 179, 8, 0.15); }
+    .history-item { transition: all 0.2s ease; }
+    .history-item:hover { background: rgba(255,255,255,0.03); }
+    .animate-fade-in { animation: fadeIn 0.3s ease; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+    .syntax-highlight { font-family: 'JetBrains Mono', monospace; }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: #0f172a; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #475569; }
+  </style>
+<base target="_blank">
+</head>
+<body class="bg-slate-950 text-slate-200 font-sans min-h-screen">
+
+  <!-- Header -->
+  <header class="border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white font-bold text-lg font-mono shadow-lg shadow-emerald-500/20">
+          $()
+        </div>
+        <div>
+          <h1 class="text-xl font-bold text-white">expr-eval</h1>
+          <p class="text-xs text-slate-400">GNU expr port for JavaScript</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-3">
+        <a href="https://www.gnu.org/software/coreutils/manual/html_node/expr-invocation.html" target="_blank" class="text-sm text-slate-400 hover:text-emerald-400 transition-colors flex items-center gap-1.5">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
+          GNU Manual
+        </a>
+        <span class="px-2 py-1 rounded-full bg-emerald-500/10 text-emerald-400 text-xs font-mono border border-emerald-500/20">v1.0.0</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-4 py-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+    <!-- Left Panel: Input & Output -->
+    <div class="lg:col-span-2 space-y-6">
+
+      <!-- Input Section -->
+      <div class="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
+        <div class="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+            <span class="text-sm font-medium text-slate-300">Expression</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <button onclick="insertExample('3 + 4')" class="text-xs px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 transition">Arithmetic</button>
+            <button onclick="insertExample('length hello')" class="text-xs px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 transition">String</button>
+            <button onclick="insertExample('hello : h.*')" class="text-xs px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 transition">Regex</button>
+          </div>
+        </div>
+
+        <div class="p-4">
+          <div class="relative">
+            <div class="absolute left-3 top-3 text-slate-500 font-mono text-sm select-none">$ expr</div>
+            <input 
+              id="exprInput" 
+              type="text" 
+              placeholder="3 + 4"
+              class="w-full bg-slate-950 border border-slate-700 rounded-lg pl-16 pr-4 py-3 text-slate-200 font-mono text-sm focus:outline-none focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/20 transition"
+              onkeydown="if(event.key==='Enter')evaluateE()"
+              autocomplete="off"
+              spellcheck="false"
+            >
+            <button onclick="evaluateE()" class="absolute right-2 top-2 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium rounded-md transition shadow-lg shadow-emerald-600/20">
+              Run
+            </button>
+          </div>
+
+          <div class="mt-3 flex items-center gap-2 text-xs text-slate-500">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            <span>Space-separated tokens. Use quotes for string literals with spaces.</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Result Section -->
+      <div id="resultPanel" class="hidden bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
+        <div class="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <svg class="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            <span class="text-sm font-medium text-slate-300">Result</span>
+          </div>
+          <div id="resultBadge" class="px-2 py-0.5 rounded-full text-xs font-mono font-medium"></div>
+        </div>
+        <div class="p-4">
+          <div id="resultValue" class="font-mono text-lg break-all"></div>
+          <div id="resultMeta" class="mt-2 text-xs text-slate-500 font-mono"></div>
+        </div>
+      </div>
+
+      <!-- Token Visualization -->
+      <div id="tokenPanel" class="hidden bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
+        <div class="px-4 py-3 border-b border-slate-800">
+          <span class="text-sm font-medium text-slate-300">Token Stream</span>
+        </div>
+        <div class="p-4">
+          <div id="tokenStream" class="flex flex-wrap gap-2"></div>
+        </div>
+      </div>
+
+      <!-- History -->
+      <div class="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
+        <div class="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <svg class="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            <span class="text-sm font-medium text-slate-300">History</span>
+          </div>
+          <button onclick="clearHistory()" class="text-xs text-slate-500 hover:text-red-400 transition flex items-center gap-1">
+            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+            Clear
+          </button>
+        </div>
+        <div id="historyList" class="max-h-80 overflow-y-auto">
+          <div class="px-4 py-8 text-center text-slate-600 text-sm">No expressions yet. Try one above!</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right Panel: Reference -->
+    <div class="space-y-6">
+
+      <!-- Quick Reference -->
+      <div class="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
+        <div class="px-4 py-3 border-b border-slate-800">
+          <span class="text-sm font-medium text-slate-300">Quick Reference</span>
+        </div>
+        <div class="p-4 space-y-4 text-sm">
+
+          <div>
+            <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Arithmetic</h3>
+            <div class="space-y-1 font-mono text-xs">
+              <div class="flex justify-between"><span class="text-emerald-400">+ - * / %</span><span class="text-slate-500">Standard ops</span></div>
+              <div class="flex justify-between"><span class="text-emerald-400">= != > < >= <=</span><span class="text-slate-500">Comparison</span></div>
+            </div>
+          </div>
+
+          <div>
+            <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Boolean</h3>
+            <div class="space-y-1 font-mono text-xs">
+              <div class="flex justify-between"><span class="text-emerald-400">|</span><span class="text-slate-500">OR (short-circuit)</span></div>
+              <div class="flex justify-between"><span class="text-emerald-400">&</span><span class="text-slate-500">AND (short-circuit)</span></div>
+            </div>
+          </div>
+
+          <div>
+            <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Keywords</h3>
+            <div class="space-y-1 font-mono text-xs">
+              <div class="flex justify-between"><span class="text-purple-400">length</span><span class="text-slate-500">String length</span></div>
+              <div class="flex justify-between"><span class="text-purple-400">substr</span><span class="text-slate-500">Substring (1-indexed)</span></div>
+              <div class="flex justify-between"><span class="text-purple-400">index</span><span class="text-slate-500">Char position</span></div>
+              <div class="flex justify-between"><span class="text-purple-400">match</span><span class="text-slate-500">Regex match</span></div>
+            </div>
+          </div>
+
+          <div>
+            <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Special</h3>
+            <div class="space-y-1 font-mono text-xs">
+              <div class="flex justify-between"><span class="text-amber-400">:</span><span class="text-slate-500">BRE match</span></div>
+              <div class="flex justify-between"><span class="text-amber-400">+</span><span class="text-slate-500">Force string</span></div>
+              <div class="flex justify-between"><span class="text-amber-400">( )</span><span class="text-slate-500">Grouping</span></div>
+              <div class="flex justify-between"><span class="text-amber-400">--</span><span class="text-slate-500">End-of-options</span></div>
+            </div>
+          </div>
+
+          <div>
+            <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Null (Falsy)</h3>
+            <div class="space-y-1 font-mono text-xs text-slate-400">
+              <div>"" · "0" · "00" · "-0"</div>
+              <div class="text-slate-600">"-" is truthy</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Examples -->
+      <div class="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
+        <div class="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
+          <span class="text-sm font-medium text-slate-300">Examples</span>
+          <button onclick="loadAllExamples()" class="text-xs text-emerald-400 hover:text-emerald-300 transition">Load All</button>
+        </div>
+        <div class="divide-y divide-slate-800/50">
+          <button onclick="runExample(['3', '+', '4'])" class="w-full px-4 py-2.5 text-left hover:bg-slate-800/50 transition group">
+            <div class="font-mono text-xs text-slate-300 group-hover:text-emerald-400 transition">3 + 4</div>
+            <div class="text-xs text-slate-600 mt-0.5">Arithmetic</div>
+          </button>
+          <button onclick="runExample(['10', '/', '3'])" class="w-full px-4 py-2.5 text-left hover:bg-slate-800/50 transition group">
+            <div class="font-mono text-xs text-slate-300 group-hover:text-emerald-400 transition">10 / 3</div>
+            <div class="text-xs text-slate-600 mt-0.5">Integer division</div>
+          </button>
+          <button onclick="runExample(['length', 'hello'])" class="w-full px-4 py-2.5 text-left hover:bg-slate-800/50 transition group">
+            <div class="font-mono text-xs text-slate-300 group-hover:text-emerald-400 transition">length hello</div>
+            <div class="text-xs text-slate-600 mt-0.5">String length</div>
+          </button>
+          <button onclick="runExample(['substr', 'hello', '2', '3'])" class="w-full px-4 py-2.5 text-left hover:bg-slate-800/50 transition group">
+            <div class="font-mono text-xs text-slate-300 group-hover:text-emerald-400 transition">substr hello 2 3</div>
+            <div class="text-xs text-slate-600 mt-0.5">Substring (1-indexed)</div>
+          </button>
+          <button onclick="runExample(['index', 'hello', 'aeiou'])" class="w-full px-4 py-2.5 text-left hover:bg-slate-800/50 transition group">
+            <div class="font-mono text-xs text-slate-300 group-hover:text-emerald-400 transition">index hello aeiou</div>
+            <div class="text-xs text-slate-600 mt-0.5">First matching char</div>
+          </button>
+          <button onclick="runExample(['hello', ':', 'h.*'])" class="w-full px-4 py-2.5 text-left hover:bg-slate-800/50 transition group">
+            <div class="font-mono text-xs text-slate-300 group-hover:text-emerald-400 transition">hello : h.*</div>
+            <div class="text-xs text-slate-600 mt-0.5">BRE match (length)</div>
+          </button>
+          <button onclick="runExample(['hello', ':', '\\(he\\)'])" class="w-full px-4 py-2.5 text-left hover:bg-slate-800/50 transition group">
+            <div class="font-mono text-xs text-slate-300 group-hover:text-emerald-400 transition">hello : \(he\)</div>
+            <div class="text-xs text-slate-600 mt-0.5">Capture group</div>
+          </button>
+          <button onclick="runExample(['1', '|', '2'])" class="w-full px-4 py-2.5 text-left hover:bg-slate-800/50 transition group">
+            <div class="font-mono text-xs text-slate-300 group-hover:text-emerald-400 transition">1 | 2</div>
+            <div class="text-xs text-slate-600 mt-0.5">OR (short-circuit)</div>
+          </button>
+          <button onclick="runExample(['0', '&', '2'])" class="w-full px-4 py-2.5 text-left hover:bg-slate-800/50 transition group">
+            <div class="font-mono text-xs text-slate-300 group-hover:text-emerald-400 transition">0 & 2</div>
+            <div class="text-xs text-slate-600 mt-0.5">AND (short-circuit)</div>
+          </button>
+          <button onclick="runExample(['999999999999999999', '+', '1'])" class="w-full px-4 py-2.5 text-left hover:bg-slate-800/50 transition group">
+            <div class="font-mono text-xs text-slate-300 group-hover:text-emerald-400 transition">999999999999999999 + 1</div>
+            <div class="text-xs text-slate-600 mt-0.5">BigInt (no precision loss)</div>
+          </button>
+        </div>
+      </div>
+
+      <!-- BRE Reference -->
+      <div class="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
+        <div class="px-4 py-3 border-b border-slate-800">
+          <span class="text-sm font-medium text-slate-300">BRE Translation</span>
+        </div>
+        <div class="p-4 space-y-2 text-xs font-mono">
+          <div class="flex justify-between"><span class="text-amber-400">\( \)</span><span class="text-slate-500">→ ( ) capture</span></div>
+          <div class="flex justify-between"><span class="text-amber-400">\+</span><span class="text-slate-500">→ + one-or-more</span></div>
+          <div class="flex justify-between"><span class="text-amber-400">\?</span><span class="text-slate-500">→ ? zero-or-one</span></div>
+          <div class="flex justify-between"><span class="text-amber-400">\|</span><span class="text-slate-500">→ | alternation</span></div>
+          <div class="flex justify-between"><span class="text-amber-400">\{n,m\}</span><span class="text-slate-500">→ {n,m} interval</span></div>
+          <div class="flex justify-between"><span class="text-amber-400">[[:digit:]]</span><span class="text-slate-500">→ [0-9]</span></div>
+          <div class="flex justify-between"><span class="text-amber-400">[[:alpha:]]</span><span class="text-slate-500">→ [A-Za-z]</span></div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Footer -->
+  <footer class="border-t border-slate-800 mt-12 py-6 text-center text-xs text-slate-600">
+    <p>expr-eval playground · GNU expr semantics in JavaScript</p>
+  </footer>
+
+  <!-- exprEval Source -->
+  <script>
+// ─────────────────────────────────────────────────────────────────────────────
+// POSIX expr — recursive descent implementation
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Operator precedence (low → high):
+//   |   &   = != < <= > >=   + -   * / %   :
+//
+// Usage:
+//   exprEval(args)                        — full GNU (default)
+//   exprEval(args, { mode: 'posix' })     — strict POSIX only
+//   exprEval(args, { mode: 'posix', extensions: { match: true } })  — mix
+//
+// Available extension flags (all default true in 'gnu' mode, false in 'posix'):
+//   match      — 'match STRING PATTERN' keyword (synonym for STRING : PATTERN)
+//   plusPrefix — '+' forces next token to be a plain string
+//   doubleDash — leading '--' is stripped (GNU end-of-options)
+//   gnuBre     — \+ \? \| BRE quantifier/alternation extensions
+//   dotAll     — '.' matches newline in regex patterns
+//
+// POSIX features always present regardless of mode:
+//   All arithmetic, comparison, logical operators
+//   length, substr, index keywords
+//   POSIX BRE: \( \) capture groups, \{n,m\} intervals, back-references
+//   POSIX bracket classes: [[:upper:]] [[:digit:]] etc.
+//   Arbitrary-precision integers (BigInt, matching GNU expr's libgmp behaviour)
+
+ function exprEval(args, opts = {}) {
+  // ── Feature flags ──────────────────────────────────────────────────────────
+  const mode = opts.mode ?? 'gnu';
+  if (mode !== 'gnu' && mode !== 'posix') throw new Error(`Unknown mode: ${mode}`);
+  const isGnu  = mode === 'gnu';
+  const ext    = opts.extensions ?? {};
+
+  const gnu = {
+    match:      ext.match      ?? isGnu,  // 'match' keyword
+    plusPrefix: ext.plusPrefix ?? isGnu,  // '+' prefix operator
+    doubleDash: ext.doubleDash ?? isGnu,  // leading '--' stripped
+    gnuBre:     ext.gnuBre     ?? isGnu,  // \+ \? \| in BRE
+    dotAll:     ext.dotAll     ?? isGnu,  // '.' matches \n
+  };
+
+  // ── Argument validation ────────────────────────────────────────────────────
+  if (!Array.isArray(args) || args.length === 0) throw new Error('syntax error');
+  for (const a of args) {
+    if (a === null || a === undefined) throw new Error('syntax error');
+  }
+
+  // GNU ext: strip a single leading '--' (end-of-options marker).
+  // Only applies in GNU mode and only when '--' is the exact first argument.
+  if (gnu.doubleDash && args[0] === '--') {
+    args = args.slice(1);
+    if (args.length === 0) throw new Error('syntax error');
+  }
+
+  // ── Primitives ─────────────────────────────────────────────────────────────
+  let pos = 0;
+  const peek = () => args[pos];
+  const next = () => args[pos++];
+  const done = () => pos >= args.length;
+
+  const isIntStr    = (s) => /^-?\d+$/.test(String(s));
+  const isNullString = (s) => {
+    // Returns true for '', '0', '00', '-0', '-00' etc. — GNU expr's null values.
+    // Bare '-' (no digits) is truthy.
+    if (s === '') return true;
+    const start = s.startsWith('-') ? 1 : 0;
+    if (start >= s.length) return false;
+    for (let i = start; i < s.length; i++) {
+      if (s[i] !== '0') return false;
+    }
+    return true;
+  };
+
+  const isNull      = (v) => v.type === 'integer' ? v.value === '0' : isNullString(v.value);
+  const intValue    = (n) => ({ type: 'integer', value: String(n) });
+  const strValue    = (s) => ({ type: 'string',  value: s });
+  const toStringVal = (v) => v.type === 'integer' ? strValue(v.value) : v;
+
+  // BigInt arithmetic matches GNU expr's libgmp (arbitrary precision, no overflow).
+  const toInteger = (v) => {
+    const s = v.value;
+    if (!isIntStr(s)) throw new Error('non-integer argument');
+    return BigInt(s);
+  };
+
+  const cmp = (op, l, r) => {
+    const lStr = l.value, rStr = r.value;
+    const numeric = isIntStr(lStr) && isIntStr(rStr);
+    const lv = numeric ? BigInt(lStr) : lStr;
+    const rv = numeric ? BigInt(rStr) : rStr;
+    switch (op) {
+      case '=':  return lv === rv;
+      case '!=': return lv !== rv;
+      case '>':  return lv >   rv;
+      case '<':  return lv <   rv;
+      case '>=': return lv >=  rv;
+      case '<=': return lv <=  rv;
+    }
+  };
+
+  // ── Regex translation (BRE → JS) ───────────────────────────────────────────
+  // POSIX BRE special backslash sequences:
+  //   \( \)  → capture groups
+  //   \{ \}  → interval quantifiers {n,m}
+  //
+  // GNU BRE extensions (only when gnu.gnuBre):
+  //   \+  → one-or-more quantifier
+  //   \?  → zero-or-one quantifier
+  //   \|  → alternation
+  //
+  // In POSIX mode, \+ \? \| are undefined by the standard.  We treat them as
+  // escaped literals (\\+ \\? \\|) which match the literal character, the
+  // safest and most portable interpretation.
+  //
+  // POSIX bracket classes ([[:upper:]] etc.) are always supported.
+  const POSIX_CLASSES = {
+    upper:  'A-Z',         lower:  'a-z',       alpha:  'A-Za-z',
+    digit:  '0-9',         alnum:  'A-Za-z0-9', space:  ' \\t\\n\\r\\f\\v',
+    blank:  ' \\t',        punct:  '\\x21-\\x2F\\x3A-\\x40\\x5B-\\x60\\x7B-\\x7E',
+    print:  ' -~',         graph:  '!-~',        cntrl:  '\\x00-\\x1f\\x7f',
+    xdigit: '0-9A-Fa-f',
+  };
+
+  function breToJs(pat) {
+    // Backslash sequences that are ALWAYS special (POSIX BRE):
+    const ALWAYS = { '(': '(', ')': ')', '{': '{', '}': '}' };
+    // GNU BRE extensions — only active when gnu.gnuBre:
+    const GNU_EXT = { '+': '+', '?': '?', '|': '|' };
+
+    let out = '', i = 0;
+    while (i < pat.length) {
+      if (pat[i] === '[') {
+        // Bracket expression: translate POSIX named classes inside.
+        let bracket = '[';
+        i++;
+        if (i < pat.length && pat[i] === '^') { bracket += '^'; i++; }
+        if (i < pat.length && pat[i] === ']') { bracket += ']'; i++; }
+        while (i < pat.length && pat[i] !== ']') {
+          if (pat[i] === '[' && i + 1 < pat.length && pat[i + 1] === ':') {
+            const end = pat.indexOf(':]', i + 2);
+            if (end !== -1) {
+              const name = pat.slice(i + 2, end);
+              bracket += POSIX_CLASSES[name] ?? pat.slice(i, end + 2);
+              i = end + 2;
+            } else { bracket += pat[i++]; }
+          } else if (pat[i] === '\\' && i + 1 < pat.length) {
+            bracket += '\\' + pat[i + 1]; i += 2;
+          } else { bracket += pat[i++]; }
+        }
+        if (i < pat.length) { bracket += ']'; i++; }
+        out += bracket;
+      } else if (pat[i] === '\\' && i + 1 < pat.length) {
+        const n = pat[i + 1];
+        if (n in ALWAYS) {
+          out += ALWAYS[n];
+        } else if (gnu.gnuBre && n in GNU_EXT) {
+          // GNU BRE extension: \+ \? \| become JS quantifiers/alternation
+          out += GNU_EXT[n];
+        } else {
+          // All other \X: pass through as-is (back-references \1-\9, \n, etc.)
+          out += '\\' + n;
+        }
+        i += 2;
+      } else if (pat[i] === '(' || pat[i] === ')') {
+        out += '\\' + pat[i++];            // bare ( ) are literals in BRE
+      } else if (('+?|').includes(pat[i])) {
+        out += '\\' + pat[i++];            // bare + ? | are literals in BRE
+      } else if ('{}' .includes(pat[i])) {
+        out += '\\' + pat[i++];            // bare { } are literals in BRE
+      } else {
+        out += pat[i++];
+      }
+    }
+    return out;
+  }
+
+  // ── Match application ──────────────────────────────────────────────────────
+  function applyMatch(leftVal, pattern, ev) {
+    if (!ev) return intValue(0n);
+    const hasCaptureGroup = /\\\(/.test(pattern);
+    const leftStr = toStringVal(leftVal).value;
+
+    // Bare back-reference with no preceding capture group is an error in GNU expr.
+    const bareBackref = /\\[1-9]/.test(pattern) && !hasCaptureGroup;
+    if (bareBackref) throw new Error('invalid regex');
+
+    // dotAll ('s' flag): GNU expr's regex makes '.' match any byte including \n.
+    // In POSIX mode, '.' matches any character EXCEPT newline (standard BRE).
+    const flags = gnu.dotAll ? 's' : '';
+    let re;
+    try { re = new RegExp('^' + breToJs(pattern), flags); }
+    catch (e) {
+      const msg = e?.message ?? '';
+      // BRE-valid patterns that JS rejects: treat as no-match (not an error).
+      //   'Nothing to repeat'  — bare * ? {n} at pattern start (literal in BRE)
+      //   'Range out of order' — [z-a] (BRE accepts, JS rejects)
+      if (msg.includes('Nothing to repeat') || msg.includes('Range out of order')) {
+        return hasCaptureGroup ? strValue('') : intValue(0n);
+      }
+      throw new Error('invalid regex');
+    }
+
+    const m = leftStr.match(re);
+    if (!m) return hasCaptureGroup ? strValue('') : intValue(0n);
+    if (m[1] !== undefined) return strValue(m[1]);
+    return intValue(BigInt(m[0].length));
+  }
+
+  // ── Parser ─────────────────────────────────────────────────────────────────
+  // Every parse function accepts `ev` (evaluate boolean).  When ev=false the
+  // function still consumes tokens (position advances) but skips all runtime
+  // operations that could throw (division-by-zero, non-integer-argument, regex).
+  // Parse-structure errors (syntax error) always propagate regardless of ev.
+
+  function parseExpr(ev) { return parseOr(ev); }
+
+  function parseOr(ev) {
+    let left = parseAnd(ev);
+    while (peek() === '|') {
+      next();
+      if (ev && !isNull(left)) {
+        parseAnd(false);              // truthy LHS: short-circuit, consume tokens
+      } else {
+        const r = parseAnd(ev);
+        if (ev) {
+          if (isNull(left)) left = isNull(r) ? intValue(0n) : r;
+        } else { left = intValue(0n); }
+      }
+    }
+    return left;
+  }
+
+  function parseAnd(ev) {
+    let left = parseCmp(ev);
+    while (peek() === '&') {
+      next();
+      if (ev && isNull(left)) {
+        parseCmp(false);              // falsy LHS: short-circuit, consume tokens
+        left = intValue(0n);
+      } else {
+        const r = parseCmp(ev);
+        if (ev) {
+          if (isNull(left) || isNull(r)) left = intValue(0n);
+        } else { left = intValue(0n); }
+      }
+    }
+    return left;
+  }
+
+  function parseCmp(ev) {
+    let left = parseAdd(ev);
+    const OPS = new Set(['=', '!=', '>', '<', '>=', '<=']);
+    while (OPS.has(peek())) {
+      const op = next();
+      const r  = parseAdd(ev);
+      left = ev ? intValue(cmp(op, left, r) ? 1n : 0n) : intValue(0n);
+    }
+    return left;
+  }
+
+  function parseAdd(ev) {
+    let left = parseMul(ev);
+    while (peek() === '+' || peek() === '-') {
+      const op = next();
+      const r  = parseMul(ev);
+      if (!ev) { left = intValue(0n); continue; }
+      left = intValue(toInteger(left) + (op === '+' ? toInteger(r) : -toInteger(r)));
+    }
+    return left;
+  }
+
+  function parseMul(ev) {
+    let left = parseMatch(ev);
+    while (peek() === '*' || peek() === '/' || peek() === '%') {
+      const op = next();
+      const r  = parseMatch(ev);
+      if (!ev) { left = intValue(0n); continue; }
+      const lNum = toInteger(left), rNum = toInteger(r);
+      if (rNum === 0n && (op === '/' || op === '%')) throw new Error('division by zero');
+      if      (op === '*') left = intValue(lNum * rNum);
+      else if (op === '/') left = intValue(lNum / rNum);
+      else                 left = intValue(lNum % rNum);
+    }
+    return left;
+  }
+
+  function parseMatch(ev) {
+    let left = parsePrimary(ev);
+    while (peek() === ':') {
+      next();
+      // Pattern is a full primary expression (same recursive rule as keywords).
+      // This means ':' 'substr' errors correctly, ':' '+ tok' forces tok as string.
+      const patOp = parsePrimary(ev);
+      left = applyMatch(left, toStringVal(patOp).value, ev);
+    }
+    return left;
+  }
+
+  function parsePrimary(ev) {
+    const tok = next();
+    if (tok === undefined) throw new Error('syntax error');
+    if (tok === ')') throw new Error('syntax error');
+
+    if (tok === '(') {
+      const val   = parseExpr(ev);
+      const close = next();
+      if (close !== ')') throw new Error('syntax error');
+      return val;
+    }
+
+    // GNU extension: '+' forces the next token to be a plain string, bypassing
+    // keyword and operator interpretation.  In POSIX mode '+' is just a string.
+    if (gnu.plusPrefix && tok === '+') {
+      const raw = next();
+      if (raw === undefined) throw new Error('syntax error');
+      return strValue(raw);
+    }
+
+    // POSIX keywords: length, substr, index.
+    // All parse their arguments as recursive primaries (not raw tokens).
+    if (tok === 'length') {
+      const operand = parsePrimary(ev);
+      if (!ev) return intValue(0n);
+      return intValue(BigInt(toStringVal(operand).value.length));
+    }
+
+    if (tok === 'substr') {
+      const strOp = parsePrimary(ev), posOp = parsePrimary(ev), lenOp = parsePrimary(ev);
+      if (!ev) return strValue('');
+      const str    = toStringVal(strOp).value;
+      const rawPos = toStringVal(posOp).value;
+      const rawLen = toStringVal(lenOp).value;
+      // Non-integer pos/len: silently returns '' (not an error), matching GNU expr.
+      if (!isIntStr(rawPos) || !isIntStr(rawLen)) return strValue('');
+      const p = Number(BigInt(rawPos)), l = Number(BigInt(rawLen));
+      if (p < 1) return strValue('');
+      return strValue(str.substr(p - 1, Math.max(0, l)));
+    }
+
+    if (tok === 'index') {
+      const strOp = parsePrimary(ev), charsOp = parsePrimary(ev);
+      if (!ev) return intValue(0n);
+      const str = toStringVal(strOp).value, chars = toStringVal(charsOp).value;
+      for (let j = 0; j < str.length; j++) {
+        if (chars.includes(str[j])) return intValue(BigInt(j + 1));
+      }
+      return intValue(0n);
+    }
+
+    // GNU extension: 'match STRING PATTERN' is equivalent to 'STRING : PATTERN'.
+    // In POSIX mode, 'match' is treated as a plain string value.
+    if (gnu.match && tok === 'match') {
+      const strOp = parsePrimary(ev), patOp = parsePrimary(ev);
+      return applyMatch(strOp, toStringVal(patOp).value, ev);
+    }
+
+    // Any other token is a plain string value (including operator characters
+    // like '=', '|', '*', ':', '+' in POSIX mode, etc.).
+    return strValue(tok);
+  }
+
+  const result = parseExpr(true);
+  if (!done()) throw new Error('syntax error');
+  return result.value;
+}
+
+  </script>
+
+  <!-- Playground Logic -->
+  <script>
+    // ── Utilities ──
+    function normalizePortValue(v) {
+      return String(v ?? '').replace(/\r\n/g, '\n');
+    }
+
+    function isFalsy(s) {
+      return s === '' || (/^-?\d+$/.test(s) && parseInt(s, 10) === 0);
+    }
+
+    function runExpr(args) {
+      try {
+        const data = normalizePortValue(exprEval(args));
+        return { success: !isFalsy(data), data, error: null };
+      } catch (err) {
+        return { success: false, data: null, error: normalizePortValue(err?.message ?? String(err)) };
+      }
+    }
+
+    // ── Tokenizer for display ──
+    function tokenize(input) {
+      const tokens = [];
+      let current = '';
+      let inQuote = false;
+      let quoteChar = null;
+
+      for (let i = 0; i < input.length; i++) {
+        const ch = input[i];
+
+        if (!inQuote && (ch === '"' || ch === "'")) {
+          if (current) tokens.push(current);
+          inQuote = true;
+          quoteChar = ch;
+          current = ch;
+        } else if (inQuote && ch === quoteChar) {
+          current += ch;
+          tokens.push(current);
+          inQuote = false;
+          quoteChar = null;
+          current = '';
+        } else if (!inQuote && /\s/.test(ch)) {
+          if (current) {
+            tokens.push(current);
+            current = '';
+          }
+        } else {
+          current += ch;
+        }
+      }
+
+      if (current) tokens.push(current);
+      return tokens;
+    }
+
+    function classifyToken(tok) {
+      const keywords = new Set(['length', 'substr', 'index', 'match']);
+      const operators = new Set(['+', '-', '*', '/', '%', '=', '!=', '>', '<', '>=', '<=', '|', '&', ':']);
+
+      if (keywords.has(tok)) return 'keyword';
+      if (operators.has(tok)) return 'operator';
+      if (tok === '(' || tok === ')') return 'paren';
+      if (tok === '--') return 'comment';
+      if (/^-?\d+$/.test(tok)) return 'number';
+      if ((tok.startsWith('"') && tok.endsWith('"')) || (tok.startsWith("'") && tok.endsWith("'"))) return 'string';
+      return 'tag';
+    }
+
+    function highlightTokens(tokens) {
+      return tokens.map(tok => {
+        const cls = classifyToken(tok);
+        return `<span class="token-${cls}">${tok.replace(/</g, '&lt;')}</span>`;
+      }).join(' ');
+    }
+
+    // ── History ──
+    let history =  []
+
+    function saveHistory() {
+      
+    }
+
+    function renderHistory() {
+      const list = document.getElementById('historyList');
+      if (history.length === 0) {
+        list.innerHTML = '<div class="px-4 py-8 text-center text-slate-600 text-sm">No expressions yet. Try one above!</div>';
+        return;
+      }
+
+      list.innerHTML = history.map((item, i) => `
+        <div class="history-item px-4 py-3 border-b border-slate-800/50 cursor-pointer animate-fade-in" onclick="restoreHistory(${i})" style="animation-delay: ${i * 0.02}s">
+          <div class="flex items-center justify-between">
+            <div class="font-mono text-xs text-slate-300 truncate flex-1">${item.input}</div>
+            <div class="ml-3 flex items-center gap-2">
+              <span class="px-1.5 py-0.5 rounded text-xs font-mono ${item.error ? 'bg-red-500/10 text-red-400' : item.success ? 'bg-emerald-500/10 text-emerald-400' : 'bg-amber-500/10 text-amber-400'}">
+                ${item.error ? 'ERR' : item.success ? 'OK' : '0'}
+              </span>
+            </div>
+          </div>
+          <div class="mt-1 font-mono text-xs ${item.error ? 'text-red-400' : 'text-slate-500'} truncate">
+            ${item.error || item.data}
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function addToHistory(input, result) {
+      history.unshift({ input, ...result, time: Date.now() });
+      saveHistory();
+      renderHistory();
+    }
+
+    function clearHistory() {
+      history = [];
+      saveHistory();
+      renderHistory();
+    }
+
+    function restoreHistory(index) {
+      const item = history[index];
+      document.getElementById('exprInput').value = item.input;
+      evaluateE();
+    }
+
+    // ── Evaluation ──
+    function parseInput(input) {
+      const tokens = [];
+      let current = '';
+      let inQuote = false;
+      let quoteChar = null;
+
+      for (let i = 0; i < input.length; i++) {
+        const ch = input[i];
+
+        if (!inQuote && (ch === '"' || ch === "'")) {
+          if (current) tokens.push(current);
+          inQuote = true;
+          quoteChar = ch;
+          current = '';
+        } else if (inQuote && ch === quoteChar) {
+          tokens.push(current);
+          inQuote = false;
+          quoteChar = null;
+          current = '';
+        } else if (!inQuote && /\s/.test(ch)) {
+          if (current) {
+            tokens.push(current);
+            current = '';
+          }
+        } else {
+          current += ch;
+        }
+      }
+
+      if (current) tokens.push(current);
+      return tokens;
+    }
+
+    function evaluateE() {
+      const input = document.getElementById('exprInput').value.trim();
+      if (!input) return;
+
+      const args = parseInput(input);
+      const result = runExpr(args);
+
+      // Show result panel
+      const panel = document.getElementById('resultPanel');
+      const badge = document.getElementById('resultBadge');
+      const value = document.getElementById('resultValue');
+      const meta = document.getElementById('resultMeta');
+
+      panel.classList.remove('hidden', 'glow-success', 'glow-error', 'glow-falsy');
+
+      if (result.error) {
+        panel.classList.add('glow-error');
+        badge.className = 'px-2 py-0.5 rounded-full text-xs font-mono font-medium bg-red-500/10 text-red-400 border border-red-500/20';
+        badge.textContent = 'ERROR';
+        value.innerHTML = `<span class="text-red-400">${result.error}</span>`;
+        meta.textContent = `exit code: 2`;
+      } else {
+        const isSuccess = result.success;
+        const isFalsyVal = !isSuccess && result.data !== '';
+
+        if (isSuccess) {
+          panel.classList.add('glow-success');
+          badge.className = 'px-2 py-0.5 rounded-full text-xs font-mono font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20';
+          badge.textContent = 'TRUTHY';
+        } else if (isFalsyVal) {
+          panel.classList.add('glow-falsy');
+          badge.className = 'px-2 py-0.5 rounded-full text-xs font-mono font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20';
+          badge.textContent = 'FALSY';
+        } else {
+          panel.classList.add('glow-success');
+          badge.className = 'px-2 py-0.5 rounded-full text-xs font-mono font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20';
+          badge.textContent = 'TRUTHY';
+        }
+
+        value.innerHTML = `<span class="text-slate-200">${result.data.replace(/</g, '&lt;') || '(empty string)'}</span>`;
+        meta.textContent = `exit code: ${isSuccess ? 0 : 1} · type: ${/^-?\d+$/.test(result.data) ? 'integer' : 'string'} · length: ${result.data.length}`;
+      }
+
+      // Show tokens
+      const tokenPanel = document.getElementById('tokenPanel');
+      const tokenStream = document.getElementById('tokenStream');
+      tokenPanel.classList.remove('hidden');
+      tokenStream.innerHTML = highlightTokens(args);
+
+      // Add to history
+      addToHistory(input, result);
+    }
+
+    function insertExample(text) {
+      document.getElementById('exprInput').value = text;
+      document.getElementById('exprInput').focus();
+    }
+
+    function runExample(args) {
+      const input = args.join(' ');
+      document.getElementById('exprInput').value = input;
+      evaluateE();
+    }
+
+    function loadAllExamples() {
+      const examples = [
+        ['3', '+', '4'],
+        ['10', '/', '3'],
+        ['length', 'hello'],
+        ['substr', 'hello', '2', '3'],
+        ['index', 'hello', 'aeiou'],
+        ['hello', ':', 'h.*'],
+        ['hello', ':', '\\(he\\)'],
+        ['1', '|', '2'],
+        ['0', '&', '2'],
+        ['999999999999999999', '+', '1'],
+      ];
+
+      examples.forEach((args, i) => {
+        setTimeout(() => {
+          const input = args.join(' ');
+          const result = runExpr(args);
+          addToHistory(input, result);
+        }, i * 100);
+      });
+
+      document.getElementById('exprInput').focus();
+    }
+
+    // ── Init ──
+    renderHistory();
+    document.getElementById('exprInput').focus();
+  </script>
+</body>
+</html>
