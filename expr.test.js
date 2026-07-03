@@ -1,95 +1,92 @@
 import { spawnSync } from 'child_process';
 
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 // POSIX expr — recursive descent implementation
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 //
 // Operator precedence (low → high):
 //   |   &   = != < <= > >=   + -   * / %   :
 //
-// Exit semantics (matching real expr):
-//   result is non-zero/non-empty → exit 0  (success: true)
-//   result is "0" or ""          → exit 1  (success: false)
-//   any error                    → exit 2  (success: false)
+// Usage:
+//   exprEval(args)                        — full GNU (default)
+//   exprEval(args, { mode: 'posix' })     — strict POSIX only
+//   exprEval(args, { mode: 'posix', extensions: { match: true } })  — mix
 //
-// Parentheses arrive as escaped tokens: '\\(' '\\)'
-// Special functions (length/substr/index) consume directly from the
-// arg stream — they are NOT stack-based.
+// Available extension flags (all default true in 'gnu' mode, false in 'posix'):
+//   match      — 'match STRING PATTERN' keyword (synonym for STRING : PATTERN)
+//   plusPrefix — '+' forces next token to be a plain string
+//   doubleDash — leading '--' is stripped (GNU end-of-options)
+//   gnuBre     — \+ \? \| BRE quantifier/alternation extensions
+//   dotAll     — '.' matches newline in regex patterns
 //
-// GNU expr internal representation:
-// - Raw tokens from command line are stored as STRING values
-// - Results of operations are stored as INTEGER values (canonicalized)
-// - When printing: integers use mpz_out_str (canonical form),
-//   strings use the raw value as-is
-// - null() checks: integer → value == 0; string → empty or all zeros
-//
-// Integer arithmetic: uses BigInt throughout to match GNU expr's
-// intmax_t (64-bit) range exactly.  Values are stored as decimal
-// strings; BigInt is only instantiated during arithmetic/comparison.
+// POSIX features always present regardless of mode:
+//   All arithmetic, comparison, logical operators
+//   length, substr, index keywords
+//   POSIX BRE: \( \) capture groups, \{n,m\} intervals, back-references
+//   POSIX bracket classes: [[:upper:]] [[:digit:]] etc.
+//   Arbitrary-precision integers (BigInt, matching GNU expr's libgmp behaviour)
 
-export function exprEval(args) {
+export function exprEval(args, opts = {}) {
+  // ── Feature flags ──────────────────────────────────────────────────────────
+  const mode = opts.mode ?? 'gnu';
+  if (mode !== 'gnu' && mode !== 'posix') throw new Error(`Unknown mode: ${mode}`);
+  const isGnu  = mode === 'gnu';
+  const ext    = opts.extensions ?? {};
+
+  const gnu = {
+    match:      ext.match      ?? isGnu,  // 'match' keyword
+    plusPrefix: ext.plusPrefix ?? isGnu,  // '+' prefix operator
+    doubleDash: ext.doubleDash ?? isGnu,  // leading '--' stripped
+    gnuBre:     ext.gnuBre     ?? isGnu,  // \+ \? \| in BRE
+    dotAll:     ext.dotAll     ?? isGnu,  // '.' matches \n
+  };
+
+  // ── Argument validation ────────────────────────────────────────────────────
   if (!Array.isArray(args) || args.length === 0) throw new Error('syntax error');
   for (const a of args) {
     if (a === null || a === undefined) throw new Error('syntax error');
   }
 
+  // GNU ext: strip a single leading '--' (end-of-options marker).
+  // Only applies in GNU mode and only when '--' is the exact first argument.
+  if (gnu.doubleDash && args[0] === '--') {
+    args = args.slice(1);
+    if (args.length === 0) throw new Error('syntax error');
+  }
+
+  // ── Primitives ─────────────────────────────────────────────────────────────
   let pos = 0;
   const peek = () => args[pos];
   const next = () => args[pos++];
   const done = () => pos >= args.length;
 
-  const isIntStr = (s) => /^-?\d+$/.test(String(s));
-
-  // toInt: used by substr/index where we need a JS number for string indexing.
-  // Validates integer syntax first, then converts via BigInt to catch non-integers
-  // cleanly, then returns Number (safe for string lengths up to 2^53-1).
-  const toInt = (s) => {
-    if (!isIntStr(s)) throw new Error('non-integer argument');
-    return Number(BigInt(s));
-  };
-
-  // Check if a string value is "null" (empty or all zeros like "00", "-0")
+  const isIntStr    = (s) => /^-?\d+$/.test(String(s));
   const isNullString = (s) => {
+    // Returns true for '', '0', '00', '-0', '-00' etc. — GNU expr's null values.
+    // Bare '-' (no digits) is truthy.
     if (s === '') return true;
-    let i = s.startsWith('-') ? 1 : 0;
-    for (; i < s.length; i++) {
+    const start = s.startsWith('-') ? 1 : 0;
+    if (start >= s.length) return false;
+    for (let i = start; i < s.length; i++) {
       if (s[i] !== '0') return false;
     }
     return true;
   };
 
-  // Check if a value is null/zero.
-  // Integer values are stored canonically (BigInt stringified), so "0" is the
-  // only zero form for integer type.  String values may be "-0", "00", etc.
-  const isNull = (v) => v.type === 'integer' ? v.value === '0' : isNullString(v.value);
+  const isNull      = (v) => v.type === 'integer' ? v.value === '0' : isNullString(v.value);
+  const intValue    = (n) => ({ type: 'integer', value: String(n) });
+  const strValue    = (s) => ({ type: 'string',  value: s });
+  const toStringVal = (v) => v.type === 'integer' ? strValue(v.value) : v;
 
-  // Create an integer value.  Always pass a BigInt so String() canonicalises it
-  // (no leading zeros, and -0n → "0").
-  const intValue = (n) => ({ type: 'integer', value: String(n) });
-
-  // Create a string value (raw, from command line token)
-  const strValue = (s) => ({ type: 'string', value: s });
-
-  // Coerce value to string for string operations
-  const toStringVal = (v) => {
-    if (v.type === 'integer') return strValue(v.value);
-    return v;
-  };
-
-  // Coerce value to BigInt for arithmetic.  Using BigInt instead of Number
-  // matches GNU expr's intmax_t range and avoids silent precision loss for
-  // values beyond Number.MAX_SAFE_INTEGER (2^53 - 1).
+  // BigInt arithmetic matches GNU expr's libgmp (arbitrary precision, no overflow).
   const toInteger = (v) => {
-    const s = v.type === 'integer' ? v.value : v.value;
+    const s = v.value;
     if (!isIntStr(s)) throw new Error('non-integer argument');
     return BigInt(s);
   };
 
   const cmp = (op, l, r) => {
-    const lStr = l.value;
-    const rStr = r.value;
-    // Use numeric comparison only when BOTH sides are integer strings.
-    // Uses BigInt to handle large values correctly.
+    const lStr = l.value, rStr = r.value;
     const numeric = isIntStr(lStr) && isIntStr(rStr);
     const lv = numeric ? BigInt(lStr) : lStr;
     const rv = numeric ? BigInt(rStr) : rStr;
@@ -103,99 +100,75 @@ export function exprEval(args) {
     }
   };
 
-  function parseExpr()  { return parseOr(); }
-
-  function parseOr() {
-    let left = parseAnd();
-    while (peek() === '|') {
-      next();
-      const r = parseAnd();
-      if (isNull(left)) {
-        // Left is null — take right. If right is also null, return integer 0.
-        if (isNull(r)) {
-          left = intValue(0n);
-        } else {
-          left = r;
-        }
-      }
-      // else: left is truthy, keep it unchanged
-    }
-    return left;
-  }
-
-  function parseAnd() {
-    let left = parseCmp();
-    while (peek() === '&') {
-      next();
-      const r = parseCmp();
-      if (isNull(left) || isNull(r)) {
-        left = intValue(0n);
-      }
-      // else: both truthy, keep left unchanged
-    }
-    return left;
-  }
-
-  function parseCmp() {
-    let left = parseAdd();
-    const OPS = new Set(['=', '!=', '>', '<', '>=', '<=']);
-    while (OPS.has(peek())) {
-      const op = next();
-      const r = parseAdd();
-      left = intValue(cmp(op, left, r) ? 1n : 0n);
-    }
-    return left;
-  }
-
-  function parseAdd() {
-    let left = parseMul();
-    while (peek() === '+' || peek() === '-') {
-      const op = next();
-      const r = parseMul();
-      const lNum = toInteger(left);
-      const rNum = toInteger(r);
-      left = intValue(op === '+' ? lNum + rNum : lNum - rNum);
-    }
-    return left;
-  }
-
-  function parseMul() {
-    let left = parseMatch();
-    while (peek() === '*' || peek() === '/' || peek() === '%') {
-      const op = next();
-      const r = parseMatch();
-      const lNum = toInteger(left);
-      const rNum = toInteger(r);
-      if (rNum === 0n && (op === '/' || op === '%')) throw new Error('division by zero');
-      // BigInt division truncates toward zero, matching C intmax_t / behaviour.
-      if (op === '*') left = intValue(lNum * rNum);
-      if (op === '/') left = intValue(lNum / rNum);
-      if (op === '%') left = intValue(lNum % rNum);
-    }
-    return left;
-  }
-
-  // Translate BRE pattern to JS regex:
-  //   \( \) → capture groups ( )
-  //   \+ \? \{ \} \| → quantifiers/alternation
-  //   bare ( ) → escaped literals \( \)
-  //   bare + ? { } | → escaped literals (literal in BRE, special in JS ERE)
+  // ── Regex translation (BRE → JS) ───────────────────────────────────────────
+  // POSIX BRE special backslash sequences:
+  //   \( \)  → capture groups
+  //   \{ \}  → interval quantifiers {n,m}
   //
-  // NOTE: BRE interval expressions \{n,m\} are translated to JS {n,m} here,
-  // but support depends on the JS engine's regex implementation.  They are
-  // accepted but not exhaustively tested.
+  // GNU BRE extensions (only when gnu.gnuBre):
+  //   \+  → one-or-more quantifier
+  //   \?  → zero-or-one quantifier
+  //   \|  → alternation
+  //
+  // In POSIX mode, \+ \? \| are undefined by the standard.  We treat them as
+  // escaped literals (\\+ \\? \\|) which match the literal character, the
+  // safest and most portable interpretation.
+  //
+  // POSIX bracket classes ([[:upper:]] etc.) are always supported.
+  const POSIX_CLASSES = {
+    upper:  'A-Z',         lower:  'a-z',       alpha:  'A-Za-z',
+    digit:  '0-9',         alnum:  'A-Za-z0-9', space:  ' \\t\\n\\r\\f\\v',
+    blank:  ' \\t',        punct:  '\\x21-\\x2F\\x3A-\\x40\\x5B-\\x60\\x7B-\\x7E',
+    print:  ' -~',         graph:  '!-~',        cntrl:  '\\x00-\\x1f\\x7f',
+    xdigit: '0-9A-Fa-f',
+  };
+
   function breToJs(pat) {
+    // Backslash sequences that are ALWAYS special (POSIX BRE):
+    const ALWAYS = { '(': '(', ')': ')', '{': '{', '}': '}' };
+    // GNU BRE extensions — only active when gnu.gnuBre:
+    const GNU_EXT = { '+': '+', '?': '?', '|': '|' };
+
     let out = '', i = 0;
     while (i < pat.length) {
-      if (pat[i] === '\\' && i + 1 < pat.length) {
+      if (pat[i] === '[') {
+        // Bracket expression: translate POSIX named classes inside.
+        let bracket = '[';
+        i++;
+        if (i < pat.length && pat[i] === '^') { bracket += '^'; i++; }
+        if (i < pat.length && pat[i] === ']') { bracket += ']'; i++; }
+        while (i < pat.length && pat[i] !== ']') {
+          if (pat[i] === '[' && i + 1 < pat.length && pat[i + 1] === ':') {
+            const end = pat.indexOf(':]', i + 2);
+            if (end !== -1) {
+              const name = pat.slice(i + 2, end);
+              bracket += POSIX_CLASSES[name] ?? pat.slice(i, end + 2);
+              i = end + 2;
+            } else { bracket += pat[i++]; }
+          } else if (pat[i] === '\\' && i + 1 < pat.length) {
+            bracket += '\\' + pat[i + 1]; i += 2;
+          } else { bracket += pat[i++]; }
+        }
+        if (i < pat.length) { bracket += ']'; i++; }
+        out += bracket;
+      } else if (pat[i] === '\\' && i + 1 < pat.length) {
         const n = pat[i + 1];
-        const special = { '(': '(', ')': ')', '+': '+', '?': '?', '{': '{', '}': '}', '|': '|' };
-        out += n in special ? special[n] : ('\\' + n);
+        if (n in ALWAYS) {
+          out += ALWAYS[n];
+        } else if (gnu.gnuBre && n in GNU_EXT) {
+          // GNU BRE extension: \+ \? \| become JS quantifiers/alternation
+          out += GNU_EXT[n];
+        } else {
+          // All other \X: pass through as-is (back-references \1-\9, \n, etc.)
+          out += '\\' + n;
+        }
         i += 2;
       } else if (pat[i] === '(' || pat[i] === ')') {
-        out += '\\' + pat[i++];
-      } else if ('+?{}|'.includes(pat[i])) {
-        out += '\\' + pat[i++];
+        out += '\\' + pat[i++];            // bare ( ) are literals in BRE
+      } else if (('+?|').includes(pat[i])) {
+        out += '\\' + pat[i++];            // bare + ? | are literals in BRE
+      } else if ('{}' .includes(pat[i])) {
+        out += '\\' + pat[i++];            // bare { } are literals in BRE
       } else {
         out += pat[i++];
       }
@@ -203,81 +176,192 @@ export function exprEval(args) {
     return out;
   }
 
-  function parseMatch() {
-    let left = parsePrimary();
-    while (peek() === ':') {
+  // ── Match application ──────────────────────────────────────────────────────
+  function applyMatch(leftVal, pattern, ev) {
+    if (!ev) return intValue(0n);
+    const hasCaptureGroup = /\\\(/.test(pattern);
+    const leftStr = toStringVal(leftVal).value;
+
+    // Bare back-reference with no preceding capture group is an error in GNU expr.
+    const bareBackref = /\\[1-9]/.test(pattern) && !hasCaptureGroup;
+    if (bareBackref) throw new Error('invalid regex');
+
+    // dotAll ('s' flag): GNU expr's regex makes '.' match any byte including \n.
+    // In POSIX mode, '.' matches any character EXCEPT newline (standard BRE).
+    const flags = gnu.dotAll ? 's' : '';
+    let re;
+    try { re = new RegExp('^' + breToJs(pattern), flags); }
+    catch (e) {
+      const msg = e?.message ?? '';
+      // BRE-valid patterns that JS rejects: treat as no-match (not an error).
+      //   'Nothing to repeat'  — bare * ? {n} at pattern start (literal in BRE)
+      //   'Range out of order' — [z-a] (BRE accepts, JS rejects)
+      if (msg.includes('Nothing to repeat') || msg.includes('Range out of order')) {
+        return hasCaptureGroup ? strValue('') : intValue(0n);
+      }
+      throw new Error('invalid regex');
+    }
+
+    const m = leftStr.match(re);
+    if (!m) return hasCaptureGroup ? strValue('') : intValue(0n);
+    if (m[1] !== undefined) return strValue(m[1]);
+    return intValue(BigInt(m[0].length));
+  }
+
+  // ── Parser ─────────────────────────────────────────────────────────────────
+  // Every parse function accepts `ev` (evaluate boolean).  When ev=false the
+  // function still consumes tokens (position advances) but skips all runtime
+  // operations that could throw (division-by-zero, non-integer-argument, regex).
+  // Parse-structure errors (syntax error) always propagate regardless of ev.
+
+  function parseExpr(ev) { return parseOr(ev); }
+
+  function parseOr(ev) {
+    let left = parseAnd(ev);
+    while (peek() === '|') {
       next();
-      const pattern = next();
-      if (pattern === undefined) throw new Error('syntax error');
-      const hasCaptureGroup = /\\\(/.test(pattern);
-      const leftStr = toStringVal(left).value;
-      let re;
-      try { re = new RegExp('^' + breToJs(pattern)); } catch { throw new Error('invalid regex'); }
-      const m = leftStr.match(re);
-      if (!m) {
-        left = hasCaptureGroup ? strValue('') : intValue(0n);
-      } else if (m[1] !== undefined) {
-        left = strValue(m[1]);
+      if (ev && !isNull(left)) {
+        parseAnd(false);              // truthy LHS: short-circuit, consume tokens
       } else {
-        left = intValue(BigInt(m[0].length));
+        const r = parseAnd(ev);
+        if (ev) {
+          if (isNull(left)) left = isNull(r) ? intValue(0n) : r;
+        } else { left = intValue(0n); }
       }
     }
     return left;
   }
 
-  function parsePrimary() {
+  function parseAnd(ev) {
+    let left = parseCmp(ev);
+    while (peek() === '&') {
+      next();
+      if (ev && isNull(left)) {
+        parseCmp(false);              // falsy LHS: short-circuit, consume tokens
+        left = intValue(0n);
+      } else {
+        const r = parseCmp(ev);
+        if (ev) {
+          if (isNull(left) || isNull(r)) left = intValue(0n);
+        } else { left = intValue(0n); }
+      }
+    }
+    return left;
+  }
+
+  function parseCmp(ev) {
+    let left = parseAdd(ev);
+    const OPS = new Set(['=', '!=', '>', '<', '>=', '<=']);
+    while (OPS.has(peek())) {
+      const op = next();
+      const r  = parseAdd(ev);
+      left = ev ? intValue(cmp(op, left, r) ? 1n : 0n) : intValue(0n);
+    }
+    return left;
+  }
+
+  function parseAdd(ev) {
+    let left = parseMul(ev);
+    while (peek() === '+' || peek() === '-') {
+      const op = next();
+      const r  = parseMul(ev);
+      if (!ev) { left = intValue(0n); continue; }
+      left = intValue(toInteger(left) + (op === '+' ? toInteger(r) : -toInteger(r)));
+    }
+    return left;
+  }
+
+  function parseMul(ev) {
+    let left = parseMatch(ev);
+    while (peek() === '*' || peek() === '/' || peek() === '%') {
+      const op = next();
+      const r  = parseMatch(ev);
+      if (!ev) { left = intValue(0n); continue; }
+      const lNum = toInteger(left), rNum = toInteger(r);
+      if (rNum === 0n && (op === '/' || op === '%')) throw new Error('division by zero');
+      if      (op === '*') left = intValue(lNum * rNum);
+      else if (op === '/') left = intValue(lNum / rNum);
+      else                 left = intValue(lNum % rNum);
+    }
+    return left;
+  }
+
+  function parseMatch(ev) {
+    let left = parsePrimary(ev);
+    while (peek() === ':') {
+      next();
+      // Pattern is a full primary expression (same recursive rule as keywords).
+      // This means ':' 'substr' errors correctly, ':' '+ tok' forces tok as string.
+      const patOp = parsePrimary(ev);
+      left = applyMatch(left, toStringVal(patOp).value, ev);
+    }
+    return left;
+  }
+
+  function parsePrimary(ev) {
     const tok = next();
     if (tok === undefined) throw new Error('syntax error');
-
-    // A lone ')' is never a valid primary
     if (tok === ')') throw new Error('syntax error');
 
     if (tok === '(') {
-      const val = parseExpr();
+      const val   = parseExpr(ev);
       const close = next();
       if (close !== ')') throw new Error('syntax error');
       return val;
     }
 
+    // GNU extension: '+' forces the next token to be a plain string, bypassing
+    // keyword and operator interpretation.  In POSIX mode '+' is just a string.
+    if (gnu.plusPrefix && tok === '+') {
+      const raw = next();
+      if (raw === undefined) throw new Error('syntax error');
+      return strValue(raw);
+    }
+
+    // POSIX keywords: length, substr, index.
+    // All parse their arguments as recursive primaries (not raw tokens).
     if (tok === 'length') {
-      // GNU expr: `length` recursively parses its argument as a primary expression,
-      // not merely the next raw token.  This means `expr length length abc` evaluates
-      // as length(length("abc")) = length(3) = 1, and `expr length length` (with no
-      // further argument) is a syntax error — matching real expr behaviour.
-      const operand = parsePrimary();
+      const operand = parsePrimary(ev);
+      if (!ev) return intValue(0n);
       return intValue(BigInt(toStringVal(operand).value.length));
     }
 
     if (tok === 'substr') {
-      // Arguments are also primaries (same recursive rule as `length`).
-      const strOp  = parsePrimary();
-      const posOp  = parsePrimary();
-      const lenOp  = parsePrimary();
+      const strOp = parsePrimary(ev), posOp = parsePrimary(ev), lenOp = parsePrimary(ev);
+      if (!ev) return strValue('');
       const str    = toStringVal(strOp).value;
       const rawPos = toStringVal(posOp).value;
       const rawLen = toStringVal(lenOp).value;
-      const p = toInt(rawPos), l = toInt(rawLen);
-      // POSIX: pos < 1 yields empty string
+      // Non-integer pos/len: silently returns '' (not an error), matching GNU expr.
+      if (!isIntStr(rawPos) || !isIntStr(rawLen)) return strValue('');
+      const p = Number(BigInt(rawPos)), l = Number(BigInt(rawLen));
       if (p < 1) return strValue('');
       return strValue(str.substr(p - 1, Math.max(0, l)));
     }
 
     if (tok === 'index') {
-      // Arguments are also primaries (same recursive rule).
-      const strOp   = parsePrimary();
-      const charsOp = parsePrimary();
-      const str     = toStringVal(strOp).value;
-      const chars   = toStringVal(charsOp).value;
+      const strOp = parsePrimary(ev), charsOp = parsePrimary(ev);
+      if (!ev) return intValue(0n);
+      const str = toStringVal(strOp).value, chars = toStringVal(charsOp).value;
       for (let j = 0; j < str.length; j++) {
         if (chars.includes(str[j])) return intValue(BigInt(j + 1));
       }
       return intValue(0n);
     }
 
+    // GNU extension: 'match STRING PATTERN' is equivalent to 'STRING : PATTERN'.
+    // In POSIX mode, 'match' is treated as a plain string value.
+    if (gnu.match && tok === 'match') {
+      const strOp = parsePrimary(ev), patOp = parsePrimary(ev);
+      return applyMatch(strOp, toStringVal(patOp).value, ev);
+    }
+
+    // Any other token is a plain string value (including operator characters
+    // like '=', '|', '*', ':', '+' in POSIX mode, etc.).
     return strValue(tok);
   }
 
-  const result = parseExpr();
+  const result = parseExpr(true);
   if (!done()) throw new Error('syntax error');
   return result.value;
 }
