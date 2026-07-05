@@ -9,7 +9,7 @@
 const POSIX_CLASSES = new Map([["alnum", "a-zA-Z0-9"],["alpha", "a-zA-Z"],["ascii", "\\x00-\\x7F"], ["blank", " \\t"],["cntrl", "\\x00-\\x1F\\x7F"], ["digit", "0-9"],["graph", "!-~"],["lower", "a-z"], ["print", " -~"],["punct", "!-/:-@\\[-`{-~"],["space", " \\t\\n\\r\\f\\v"], ["upper", "A-Z"],["word", "a-zA-Z0-9_"],["xdigit", "0-9A-Fa-f"]
 ]);
 
-function breToEre(pattern) {
+function breToEre(pattern, posix = false) {
   let result = ""; let i = 0; let inBracket = false;
   while (i < pattern.length) {
     if (pattern[i] === "[" && !inBracket) {
@@ -50,10 +50,28 @@ function breToEre(pattern) {
     if (pattern[i] === "\\") {
       if (i + 1 < pattern.length) {
         const next = pattern[i + 1];
-        if (["+", "?", "|", "(", ")", "{", "}"].includes(next)) { result += next; i += 2; continue; }
+        // \( \) \{ \} are core POSIX BRE grouping/intervals -- always convert.
+        if (["(", ")", "{", "}"].includes(next)) { result += next; i += 2; continue; }
+        // \+ \? \| are GNU BRE extensions (quantifier/alternation without
+        // full ERE). Under posix they have no special meaning and reduce to
+        // the literal character instead.
+        if (["+", "?", "|"].includes(next)) {
+          if (posix) { result += `\\${next}`; i += 2; continue; }
+          result += next; i += 2; continue;
+        }
+        // \< \> (GNU word-boundary anchors) map to \b in GNU mode; under
+        // posix they're just literal angle brackets.
+        if (next === "<" || next === ">") {
+          if (!posix) { result += "\\b"; i += 2; continue; }
+          result += next; i += 2; continue;
+        }
         if (next === "t") { result += "\t"; i += 2; continue; }
         if (next === "n") { result += "\n"; i += 2; continue; }
         if (next === "r") { result += "\r"; i += 2; continue; }
+        // \b \B \w \W \s \S are GNU character-class/boundary shortcuts that
+        // happen to already match JS regex syntax in GNU mode; under posix
+        // they degrade to the literal letter.
+        if (posix && ["b", "B", "w", "W", "s", "S"].includes(next)) { result += next; i += 2; continue; }
         result += pattern[i] + next; i += 2; continue;
       }
     }
@@ -85,21 +103,34 @@ function normalizeForJs(pattern) {
 }
 
 function escapeForList(input) {
-  let result = "";
+  const tokens = [];
   for (let i = 0; i < input.length; i++) {
     const ch = input[i]; const code = ch.charCodeAt(0);
-    if (ch === "\\") result += "\\\\";
-    else if (ch === "\t") result += "\\t";
-    else if (ch === "\n") result += "$\n";
-    else if (ch === "\r") result += "\\r";
-    else if (ch === "\x07") result += "\\a";
-    else if (ch === "\b") result += "\\b";
-    else if (ch === "\f") result += "\\f";
-    else if (ch === "\v") result += "\\v";
-    else if (code < 32 || code >= 127) result += `\\${code.toString(8).padStart(3, "0")}`;
-    else result += ch;
+    if (ch === "\\") tokens.push("\\\\");
+    else if (ch === "\t") tokens.push("\\t");
+    else if (ch === "\n") tokens.push("\\n");
+    else if (ch === "\r") tokens.push("\\r");
+    else if (ch === "\x07") tokens.push("\\a");
+    else if (ch === "\b") tokens.push("\\b");
+    else if (ch === "\f") tokens.push("\\f");
+    else if (ch === "\v") tokens.push("\\v");
+    else if (code < 32 || code >= 127) tokens.push(`\\${code.toString(8).padStart(3, "0")}`);
+    else tokens.push(ch);
   }
-  return `${result}$`;
+  // GNU sed wraps `l` output at 70 columns by default: each wrapped line
+  // holds up to 69 characters of the escaped text plus a continuation "\",
+  // and the final line ends with the "$" terminator. Multi-character escape
+  // sequences (e.g. "\\", "\t", octal codes) are never split across the
+  // wrap boundary -- if a token doesn't fully fit, it's deferred whole to
+  // the next line.
+  const width = 70;
+  let wrapped = ""; let lineLen = 0;
+  for (const tok of tokens) {
+    if (lineLen + tok.length > width - 1) { wrapped += "\\\n"; lineLen = 0; }
+    wrapped += tok; lineLen += tok.length;
+  }
+  wrapped += "$";
+  return wrapped;
 }
 
 // ==========================================
@@ -119,7 +150,7 @@ const SedTokenType = {
 };
 
 class SedLexer {
-  constructor(input) { this.input = input; this.pos = 0; this.line = 1; this.column = 1; }
+  constructor(input, posix = false) { this.input = input; this.pos = 0; this.line = 1; this.column = 1; this.posix = posix; }
   tokenize() {
     const tokens =[];
     while (this.pos < this.input.length) { const token = this.nextToken(); if (token) tokens.push(token); }
@@ -158,7 +189,7 @@ class SedLexer {
     if (ch === "!") { this.advance(); return { type: SedTokenType.NEGATION, value: "!", line: startLine, column: startColumn }; }
     if (ch === "$") { this.advance(); return { type: SedTokenType.DOLLAR, value: "$", line: startLine, column: startColumn }; }
     if (this.isDigit(ch)) return this.readNumber();
-    if (ch === "+" && this.isDigit(this.input[this.pos + 1] || "")) return this.readRelativeOffset();
+    if (ch === "+" && !this.posix && this.isDigit(this.input[this.pos + 1] || "")) return this.readRelativeOffset();
     if (ch === "/") return this.readPattern();
     if (ch === ":") return this.readLabelDef();
     return this.readCommand();
@@ -166,7 +197,7 @@ class SedLexer {
   readNumber() {
     const startLine = this.line; const startColumn = this.column; let numStr = "";
     while (this.isDigit(this.peek())) numStr += this.advance();
-    if (this.peek() === "~") {
+    if (this.peek() === "~" && !this.posix) {
       this.advance(); let stepStr = ""; while (this.isDigit(this.peek())) stepStr += this.advance();
       return { type: SedTokenType.STEP, value: `${numStr}~${stepStr}`, first: parseInt(numStr, 10), step: parseInt(stepStr, 10) || 0, line: startLine, column: startColumn };
     }
@@ -201,6 +232,8 @@ class SedLexer {
   }
   readCommand() {
     const startLine = this.line; const startColumn = this.column; const ch = this.advance();
+    const gnuOnly = () => ({ type: SedTokenType.ERROR, value: ch, line: startLine, column: startColumn });
+    if (this.posix && "TRWeFzvQ".includes(ch)) return gnuOnly();
     switch (ch) {
       case "s": return this.readSubstitute(startLine, startColumn);
       case "y": return this.readTransliterate(startLine, startColumn);
@@ -213,10 +246,23 @@ class SedLexer {
       case "w": return this.readFileCommand(SedTokenType.FILE_WRITE, "w", startLine, startColumn);
       case "W": return this.readFileCommand(SedTokenType.FILE_WRITE_LINE, "W", startLine, startColumn);
       case "e": return this.readExecute(startLine, startColumn);
-      case "p": case "P": case "d": case "D": case "h": case "H": case "g": case "G": case "x": case "n": case "N": case "q": case "Q": case "z": case "=": case "l": case "F": return { type: SedTokenType.COMMAND, value: ch, line: startLine, column: startColumn };
+      case "p": case "P": case "d": case "D": case "h": case "H": case "g": case "G": case "x": case "n": case "N": case "q": case "Q": case "z": case "=": case "l": case "F":
+        return this.readSimpleCommand(ch, startLine, startColumn);
       case "v": return this.readVersion(startLine, startColumn);
       default: return { type: SedTokenType.ERROR, value: ch, line: startLine, column: startColumn };
     }
+  }
+  readSimpleCommand(ch, startLine, startColumn) {
+    // q, Q, and l accept an optional trailing numeric argument (exit code /
+    // line-wrap width); everything else must be followed only by
+    // whitespace and a terminator (newline, ;, }, comment, or EOF).
+    while (this.peek() === " " || this.peek() === "\t") this.advance();
+    if ("qQl".includes(ch)) { while (this.isDigit(this.peek())) this.advance(); while (this.peek() === " " || this.peek() === "\t") this.advance(); }
+    const next = this.peek();
+    if (next !== "" && next !== "\n" && next !== ";" && next !== "}" && next !== "#") {
+      return { type: SedTokenType.ERROR, value: "extra characters after command", line: startLine, column: startColumn };
+    }
+    return { type: SedTokenType.COMMAND, value: ch, line: startLine, column: startColumn };
   }
   readSubstitute(startLine, startColumn) {
     const delimiter = this.advance();
@@ -259,9 +305,10 @@ class SedLexer {
     if (this.peek() === delimiter) this.advance();
     
     let flags = "";
+    const allowedFlags = this.posix ? ["g", "p"] : ["g", "i", "p", "I", "e"];
     while (this.pos < this.input.length) { 
       const ch = this.peek(); 
-      if (["g", "i", "p", "I", "e"].includes(ch) || this.isDigit(ch)) flags += this.advance(); 
+      if (allowedFlags.includes(ch) || this.isDigit(ch)) flags += this.advance(); 
       else break; 
     }
     
@@ -301,18 +348,30 @@ class SedLexer {
   readTextCommand(cmd, startLine, startColumn) {
     let hasBackslash = false;
     if (this.peek() === "\\" && this.pos + 1 < this.input.length &&["\n", " ", "\t"].includes(this.input[this.pos + 1])) { hasBackslash = true; this.advance(); }
+    if (this.posix && !hasBackslash) return { type: SedTokenType.ERROR, value: `expected \\ after \`${cmd}'`, line: startLine, column: startColumn };
     if (this.peek() === " " || this.peek() === "\t") this.advance();
     if (this.peek() === "\\" && this.pos + 1 < this.input.length && [" ", "\t"].includes(this.input[this.pos + 1])) this.advance();
     if (hasBackslash && this.peek() === "\n") this.advance();
     let text = "";
     while (this.pos < this.input.length) {
       const ch = this.peek();
-      if (ch === "\n") { if (text.endsWith("\\")) { text = `${text.slice(0, -1)}\n`; this.advance(); continue; } break; }
-      if (ch === "\\" && this.pos + 1 < this.input.length) {
-        const next = this.input[this.pos + 1];
-        if (next === "n") { text += "\n"; this.advance(); this.advance(); continue; }
-        if (next === "t") { text += "\t"; this.advance(); this.advance(); continue; }
-        if (next === "r") { text += "\r"; this.advance(); this.advance(); continue; }
+      if (ch === "\n") break;
+      if (ch === "\\") {
+        if (this.pos + 1 < this.input.length) {
+          const next = this.input[this.pos + 1];
+          if (next === "\n") { text += "\n"; this.advance(); this.advance(); continue; }
+          if (next === "n") { text += "\n"; this.advance(); this.advance(); continue; }
+          if (next === "t") { text += "\t"; this.advance(); this.advance(); continue; }
+          if (next === "r") { text += "\r"; this.advance(); this.advance(); continue; }
+          if (next === "a") { text += "\x07"; this.advance(); this.advance(); continue; }
+          if (next === "f") { text += "\f"; this.advance(); this.advance(); continue; }
+          if (next === "v") { text += "\v"; this.advance(); this.advance(); continue; }
+          // Any other backslash-escaped character in a/i/c text just yields
+          // that character literally -- the backslash is stripped.
+          text += next; this.advance(); this.advance(); continue;
+        } else {
+          text += this.advance(); continue;
+        }
       }
       text += this.advance();
     }
@@ -346,11 +405,12 @@ class SedLexer {
 // ==========================================
 
 class SedParser {
-  constructor(scripts, extendedRegex = false) { this.scripts = scripts; this.extendedRegex = extendedRegex; this.tokens =[]; this.pos = 0; }
+  static nextRangeId = 1;
+  constructor(scripts, extendedRegex = false, posix = false) { this.scripts = scripts; this.extendedRegex = extendedRegex; this.posix = posix; this.tokens =[]; this.pos = 0; }
   parse() {
     const allCommands =[];
     for (const script of this.scripts) {
-      const lexer = new SedLexer(script); this.tokens = lexer.tokenize(); this.pos = 0;
+      const lexer = new SedLexer(script, this.posix); this.tokens = lexer.tokenize(); this.pos = 0;
       while (!this.isAtEnd()) {
         if (this.check(SedTokenType.NEWLINE) || this.check(SedTokenType.SEMICOLON)) { this.advance(); continue; }
         const posBefore = this.pos; const result = this.parseCommand();
@@ -375,7 +435,7 @@ class SedParser {
     
     switch (token.type) {
       case SedTokenType.COMMAND: return this.parseSimpleCommand(token, address);
-      case SedTokenType.SUBSTITUTE: this.advance(); return { command: { ...token, type: "substitute", address, extendedRegex: this.extendedRegex } };
+      case SedTokenType.SUBSTITUTE: this.advance(); return { command: { ...token, type: "substitute", address, extendedRegex: this.extendedRegex, posix: this.posix } };
       
       case SedTokenType.TRANSLITERATE: {
         this.advance();
@@ -388,8 +448,19 @@ class SedParser {
       case SedTokenType.BRANCH: this.advance(); return { command: { type: "branch", address, label: token.label } };
       case SedTokenType.BRANCH_ON_SUBST: this.advance(); return { command: { type: "branchOnSubst", address, label: token.label } };
       case SedTokenType.BRANCH_ON_NO_SUBST: this.advance(); return { command: { type: "branchOnNoSubst", address, label: token.label } };
-      case SedTokenType.TEXT_CMD: this.advance(); return { command: { type: token.value === "a" ? "append" : token.value === "i" ? "insert" : "change", address, text: token.text } };
-      case SedTokenType.FILE_READ: this.advance(); return { command: { type: "readFile", address, filename: token.filename || "" } };
+      case SedTokenType.TEXT_CMD: {
+        this.advance();
+        const textType = token.value === "a" ? "append" : token.value === "i" ? "insert" : "change";
+        if (this.posix && textType !== "change" && address && address.end !== undefined) {
+          return { command: null, error: "command only uses one address" };
+        }
+        return { command: { type: textType, address, text: token.text } };
+      }
+      case SedTokenType.FILE_READ: {
+        this.advance();
+        if (this.posix && address && address.end !== undefined) return { command: null, error: "command only uses one address" };
+        return { command: { type: "readFile", address, filename: token.filename || "" } };
+      }
       case SedTokenType.FILE_READ_LINE: this.advance(); return { command: { type: "readFileLine", address, filename: token.filename || "" } };
       case SedTokenType.FILE_WRITE: this.advance(); return { command: { type: "writeFile", address, filename: token.filename || "" } };
       case SedTokenType.FILE_WRITE_LINE: this.advance(); return { command: { type: "writeFirstLine", address, filename: token.filename || "" } };
@@ -409,7 +480,12 @@ class SedParser {
       "n": "next", "N": "nextAppend", "q": "quit", "Q": "quitSilent", "z": "zap",
       "=": "lineNumber", "l": "list", "F": "printFilename"
     };
-    if (map[cmd]) return { command: { type: map[cmd], address } };
+    if (map[cmd]) {
+      if (this.posix && "q=l".includes(cmd) && address && address.end !== undefined) {
+        return { command: null, error: "command only uses one address" };
+      }
+      return { command: { type: map[cmd], address } };
+    }
     return { command: null, error: `unknown command: ${cmd}` };
   }
   parseGroup(address) {
@@ -427,10 +503,13 @@ class SedParser {
   parseAddressRange() {
     if (this.check(SedTokenType.COMMA)) return { error: "expected context address" };
     const start = this.parseAddress(); if (start === undefined) return undefined;
+    if (this.posix && start === 0) return { error: "invalid usage of line address 0" };
     let end;
     if (this.check(SedTokenType.RELATIVE_OFFSET)) { const token = this.advance(); end = { offset: token.offset || 0 }; }
     else if (this.check(SedTokenType.COMMA)) { this.advance(); end = this.parseAddress(); if (end === undefined) return { error: "expected context address" }; }
-    return { address: { start, end } };
+    const address = { start, end };
+    if (end !== undefined) address.rangeId = SedParser.nextRangeId++;
+    return { address };
   }
   parseAddress() {
     const token = this.peek();
@@ -449,7 +528,7 @@ class SedParser {
   isAtEnd() { return this.peek().type === SedTokenType.EOF; }
 }
 
-function parseMultipleScripts(scripts, extendedRegex = false) {
+function parseMultipleScripts(scripts, extendedRegex = false, posix = false) {
   let silentMode = false; let extendedRegexFromComment = false; const joinedScripts =[];
   for (let i = 0; i < scripts.length; i++) {
     let script = scripts[i];
@@ -468,7 +547,7 @@ function parseMultipleScripts(scripts, extendedRegex = false) {
     } else { joinedScripts.push(script); }
   }
   const combinedScript = joinedScripts.join("\n");
-  const parser = new SedParser([combinedScript], extendedRegex || extendedRegexFromComment);
+  const parser = new SedParser([combinedScript], extendedRegex || extendedRegexFromComment, posix);
   const result = parser.parse();
   if (result.error) return { ...result, silentMode, extendedRegexMode: extendedRegexFromComment };
 
@@ -505,14 +584,39 @@ function parseMultipleScripts(scripts, extendedRegex = false) {
 // 4. Executor
 // ==========================================
 
-function createInitialState(totalLines, filename, rangeStates) {
+function createInitialState(totalLines, filename, rangeStates, extendedRegex, posix) {
   return {
     patternSpace: "", holdSpace: "", lineNumber: 0, totalLines,
+    chomped: true, holdChomped: true, extendedRegex: !!extendedRegex, posix: !!posix,
     deleted: false, printed: false, quit: false, quitSilent: false,
-    exitCode: undefined, errorMessage: undefined, appendBuffer:[],
-    substitutionMade: false, lineNumberOutput: [], nCommandOutput:[],
+    exitCode: undefined, errorMessage: undefined,
+    substitutionMade: false,
+    deferredOutput: [],
     restartCycle: false, inDRestartedCycle: false, currentFilename: filename,
-    pendingFileReads: [], pendingFileWrites:[], rangeStates: rangeStates || new Map(), linesConsumedInCycle: 0
+    pendingFileWrites: [], rangeStates: rangeStates || new Map(), linesConsumedInCycle: 0
+  };
+}
+
+// Output builder implementing GNU sed's "missing newline" deferred semantics:
+// a chunk that comes from an unterminated final input line is written without
+// its trailing newline; if further output follows, the newline is inserted
+// first to separate them. If nothing follows, the newline is simply never
+// written (matching a file with no trailing newline).
+const MAX_OUTPUT_SIZE = 50 * 1024 * 1024; // 50MB safety cap
+
+function makeOutputBuilder() {
+  let buf = "";
+  let pending = false;
+  return {
+    write(text, chomped) {
+      if (pending) { buf += "\n"; pending = false; }
+      buf += text;
+      if (chomped) buf += "\n"; else pending = true;
+      if (buf.length > MAX_OUTPUT_SIZE) {
+        throw new Error("sed: output size limit exceeded (possible infinite loop in script)");
+      }
+    },
+    result() { return buf; }
   };
 }
 
@@ -532,17 +636,19 @@ function matchesAddress(address, lineNum, totalLines, line, state) {
       let rawPattern = address.pattern;
       if (rawPattern === "" && state?.lastPattern) rawPattern = state.lastPattern;
       else if (rawPattern !== "" && state) state.lastPattern = rawPattern;
-      const pattern = normalizeForJs(breToEre(rawPattern));
-      return new RegExp(pattern).test(line);
+      const pattern = normalizeForJs(state?.extendedRegex ? rawPattern : breToEre(rawPattern, !!state?.posix));
+      return new RegExp(pattern, "s").test(line);
     } catch { return false; }
   }
   return false;
 }
 
 function serializeRange(range) {
+  if (range.rangeId !== undefined) return `#${range.rangeId}`;
   const serializeAddr = addr => {
     if (addr === undefined) return "undefined"; if (addr === "$") return "$";
     if (typeof addr === "number") return String(addr);
+    if ("offset" in addr) return `+${addr.offset}`;
     if ("pattern" in addr) return `/${addr.pattern}/`;
     if ("first" in addr) return `${addr.first}~${addr.step}`;
     return "unknown";
@@ -551,73 +657,109 @@ function serializeRange(range) {
 }
 
 function isInRangeInternal(range, lineNum, totalLines, line, rangeStates, state) {
-  if (!range || (!range.start && !range.end)) return true;
+  if (!range || (!range.start && !range.end)) return { matched: true, closing: true };
   const { start, end } = range;
-  if (start !== undefined && end === undefined) return matchesAddress(start, lineNum, totalLines, line, state);
+  if (start !== undefined && end === undefined) {
+    const matched = matchesAddress(start, lineNum, totalLines, line, state);
+    return { matched, closing: matched };
+  }
 
   if (start !== undefined && end !== undefined) {
-    const hasPatternStart = typeof start === "object" && "pattern" in start;
-    const hasPatternEnd = typeof end === "object" && "pattern" in end;
+    const isSimpleNum = v => v === "$" || typeof v === "number";
+    const hasPatternStart = !isSimpleNum(start);
+    const hasPatternEnd = !isSimpleNum(end);
     const hasRelativeEnd = isRelativeOffset(end);
 
     if (hasRelativeEnd && rangeStates) {
       const rangeKey = serializeRange(range); let rangeState = rangeStates.get(rangeKey);
       if (!rangeState) { rangeState = { active: false }; rangeStates.set(rangeKey, rangeState); }
       if (!rangeState.active) {
-        if (matchesAddress(start, lineNum, totalLines, line, state)) {
+        if (rangeState.completed) return { matched: false, closing: false };
+        const startMatches = typeof start === "number" ? lineNum >= start : matchesAddress(start, lineNum, totalLines, line, state);
+        if (startMatches) {
           rangeState.active = true; rangeState.startLine = lineNum; rangeStates.set(rangeKey, rangeState);
-          if (end.offset === 0) { rangeState.active = false; rangeStates.set(rangeKey, rangeState); }
-          return true;
+          if (end.offset === 0) { rangeState.active = false; if (typeof start === "number") rangeState.completed = true; rangeStates.set(rangeKey, rangeState); return { matched: true, closing: true }; }
+          return { matched: true, closing: false };
         }
-        return false;
+        return { matched: false, closing: false };
       } else {
-        const startLine = rangeState.startLine || lineNum;
-        if (lineNum >= startLine + end.offset) { rangeState.active = false; rangeStates.set(rangeKey, rangeState); }
-        return true;
+        const target = (rangeState.startLine || lineNum) + end.offset;
+        const closing = lineNum >= target;
+        if (closing) { rangeState.active = false; if (typeof start === "number") rangeState.completed = true; rangeStates.set(rangeKey, rangeState); }
+        return { matched: true, closing };
       }
     }
 
     if (!hasPatternStart && !hasPatternEnd && !hasRelativeEnd) {
       const startNum = typeof start === "number" ? start : start === "$" ? totalLines : 1;
       const endNum = typeof end === "number" ? end : end === "$" ? totalLines : totalLines;
-      if (startNum <= endNum) return lineNum >= startNum && lineNum <= endNum;
+      if (startNum <= endNum) {
+        const matched = lineNum >= startNum && lineNum <= endNum;
+        return { matched, closing: matched && lineNum === endNum };
+      }
       if (rangeStates) {
         const rangeKey = serializeRange(range); let rangeState = rangeStates.get(rangeKey);
         if (!rangeState) { rangeState = { active: false }; rangeStates.set(rangeKey, rangeState); }
-        if (!rangeState.completed) { if (lineNum >= startNum) { rangeState.completed = true; rangeStates.set(rangeKey, rangeState); return true; } }
-        return false;
+        if (!rangeState.completed && lineNum >= startNum) {
+          rangeState.completed = true; rangeStates.set(rangeKey, rangeState);
+          if (lineNum === startNum) return { matched: true, closing: true };
+        }
+        return { matched: false, closing: false };
       }
-      return false;
+      return { matched: false, closing: false };
     }
 
     if (rangeStates) {
       const rangeKey = serializeRange(range); let rangeState = rangeStates.get(rangeKey);
       if (!rangeState) { rangeState = { active: false }; rangeStates.set(rangeKey, rangeState); }
+      // Returns 'over' (already past end -- exclude this line), 'close' (this
+      // is exactly the end line -- include and close), or 'open' (still active).
+      const endStatus = () => {
+        if (typeof end === "number") {
+          if (lineNum > end) return "over";
+          if (lineNum === end) return "close";
+          return "open";
+        }
+        return matchesAddress(end, lineNum, totalLines, line, state) ? "close" : "open";
+      };
       if (!rangeState.active) {
-        if (rangeState.completed) return false;
+        if (rangeState.completed) return { matched: false, closing: false };
         let startMatches = typeof start === "number" ? lineNum >= start : matchesAddress(start, lineNum, totalLines, line, state);
         if (startMatches) {
           rangeState.active = true; rangeState.startLine = lineNum; rangeStates.set(rangeKey, rangeState);
-          if (matchesAddress(end, lineNum, totalLines, line, state)) { rangeState.active = false; if (typeof start === "number") rangeState.completed = true; rangeStates.set(rangeKey, rangeState); }
-          return true;
+          // The start line always matches. A numeric addr2 that's already
+          // satisfied closes the range immediately, but a *regex* addr2 is
+          // never tested against the very line where the range just began
+          // (matching GNU sed's documented behavior).
+          const endIsPattern = typeof end === "object" && end !== null && "pattern" in end;
+          let closing = false;
+          if (!endIsPattern || start === 0) {
+            const status = endStatus();
+            if (status === "close" || status === "over") { rangeState.active = false; if (typeof start === "number") rangeState.completed = true; rangeStates.set(rangeKey, rangeState); closing = true; }
+          }
+          return { matched: true, closing };
         }
-        return false;
+        return { matched: false, closing: false };
       } else {
-        if (matchesAddress(end, lineNum, totalLines, line, state)) { rangeState.active = false; if (typeof start === "number") rangeState.completed = true; rangeStates.set(rangeKey, rangeState); }
-        return true;
+        const status = endStatus();
+        if (status === "over") { rangeState.active = false; if (typeof start === "number") rangeState.completed = true; rangeStates.set(rangeKey, rangeState); return { matched: false, closing: false }; }
+        if (status === "close") { rangeState.active = false; if (typeof start === "number") rangeState.completed = true; rangeStates.set(rangeKey, rangeState); return { matched: true, closing: true }; }
+        return { matched: true, closing: false };
       }
     }
-    return matchesAddress(start, lineNum, totalLines, line, state);
+    const matched = matchesAddress(start, lineNum, totalLines, line, state);
+    return { matched, closing: matched };
   }
-  return true;
+  return { matched: true, closing: true };
 }
 
 function isInRange(range, lineNum, totalLines, line, rangeStates, state) {
-  const result = isInRangeInternal(range, lineNum, totalLines, line, rangeStates, state);
-  return range?.negated ? !result : result;
+  const { matched, closing } = isInRangeInternal(range, lineNum, totalLines, line, rangeStates, state);
+  if (range?.negated) return { matched: !matched, closing: !matched };
+  return { matched, closing };
 }
 
-function processReplacement(replacement, match, groups) {
+function processReplacement(replacement, match, groups, posix = false) {
   let result = ""; let i = 0;
   let caseMode = "none"; let nextCase = "none";
 
@@ -637,11 +779,13 @@ function processReplacement(replacement, match, groups) {
     if (replacement[i] === "\\") {
       if (i + 1 < replacement.length) {
         const next = replacement[i + 1];
-        if (next === "U") { caseMode = "upper"; i += 2; continue; }
-        if (next === "L") { caseMode = "lower"; i += 2; continue; }
-        if (next === "E") { caseMode = "none"; i += 2; continue; }
-        if (next === "u") { nextCase = "upper"; i += 2; continue; }
-        if (next === "l") { nextCase = "lower"; i += 2; continue; }
+        if (!posix) {
+          if (next === "U") { caseMode = "upper"; i += 2; continue; }
+          if (next === "L") { caseMode = "lower"; i += 2; continue; }
+          if (next === "E") { caseMode = "none"; i += 2; continue; }
+          if (next === "u") { nextCase = "upper"; i += 2; continue; }
+          if (next === "l") { nextCase = "lower"; i += 2; continue; }
+        }
 
         if (next === "&") { append("&"); i += 2; continue; }
         if (next === "n") { append("\n"); i += 2; continue; }
@@ -691,7 +835,7 @@ async function doAsyncReplace(input, regex, cmd, shell) {
 
     if (doReplace) {
       matchedAny = true;
-      let replaced = processReplacement(cmd.replacement, matchedText, groups);
+      let replaced = processReplacement(cmd.replacement, matchedText, groups, !!cmd.posix);
       if (cmd.executeShell && shell) {
         replaced = await shell(replaced);
         if (replaced.endsWith("\n")) replaced = replaced.slice(0, -1);
@@ -716,10 +860,11 @@ async function doAsyncReplace(input, regex, cmd, shell) {
   return { result, matchedAny };
 }
 
-async function executeCommand(cmd, state, shell) {
+async function executeCommand(cmd, state, ctx, shell) {
   const { lineNumber, totalLines, patternSpace } = state;
   if (cmd.type === "label") return;
-  if (!isInRange(cmd.address, lineNumber, totalLines, patternSpace, state.rangeStates, state)) return;
+  const addrResult = isInRange(cmd.address, lineNumber, totalLines, patternSpace, state.rangeStates, state);
+  if (!addrResult.matched) return;
 
   switch (cmd.type) {
     case "substitute": {
@@ -729,26 +874,28 @@ async function executeCommand(cmd, state, shell) {
       let rawPattern = cmd.pattern;
       if (rawPattern === "" && state.lastPattern) rawPattern = state.lastPattern;
       else if (rawPattern !== "") state.lastPattern = rawPattern;
-      const pattern = normalizeForJs(cmd.extendedRegex ? rawPattern : breToEre(rawPattern));
+      const pattern = normalizeForJs(cmd.extendedRegex ? rawPattern : breToEre(rawPattern, !!cmd.posix));
 
       try {
-        const execRegex = new RegExp(pattern, "g" + (cmd.ignoreCase ? "i" : ""));
-        const testRegex = new RegExp(pattern, cmd.ignoreCase ? "i" : "");
+        const execRegex = new RegExp(pattern, "gs" + (cmd.ignoreCase ? "i" : ""));
+        const testRegex = new RegExp(pattern, "s" + (cmd.ignoreCase ? "i" : ""));
         if (testRegex.test(state.patternSpace)) {
           const { result, matchedAny } = await doAsyncReplace(state.patternSpace, execRegex, cmd, shell);
           if (matchedAny) {
             state.substitutionMade = true;
             state.patternSpace = result;
-            if (cmd.printOnMatch) state.lineNumberOutput.push(state.patternSpace);
+            if (cmd.printOnMatch) ctx.builder.write(state.patternSpace, state.chomped);
           }
         }
       } catch (e) { /* ignore */ }
       break;
     }
-    case "print": state.lineNumberOutput.push(state.patternSpace); break;
+    case "print": ctx.builder.write(state.patternSpace, state.chomped); break;
     case "printFirstLine": {
       const newlineIdx = state.patternSpace.indexOf("\n");
-      state.lineNumberOutput.push(newlineIdx !== -1 ? state.patternSpace.slice(0, newlineIdx) : state.patternSpace); break;
+      if (newlineIdx !== -1) ctx.builder.write(state.patternSpace.slice(0, newlineIdx), true);
+      else ctx.builder.write(state.patternSpace, state.chomped);
+      break;
     }
     case "delete": state.deleted = true; break;
     case "deleteFirstLine": {
@@ -757,28 +904,33 @@ async function executeCommand(cmd, state, shell) {
       else { state.deleted = true; } break;
     }
     case "zap": state.patternSpace = ""; break;
-    case "append": state.appendBuffer.push(cmd.text); break;
-    case "insert": state.appendBuffer.unshift(`__INSERT__${cmd.text}`); break;
-    case "change": state.deleted = true; state.changedText = cmd.text; break;
-    case "hold": state.holdSpace = state.patternSpace; break;
+    case "append": state.deferredOutput.push({ type: "text", text: cmd.text, chomped: true }); break;
+    case "insert": ctx.builder.write(cmd.text, true); break;
+    case "change": if (addrResult.closing) ctx.builder.write(cmd.text, true); state.deleted = true; break;
+    case "hold": state.holdSpace = state.patternSpace; state.holdChomped = state.chomped; break;
     case "holdAppend":
     state.holdSpace = `${state.holdSpace}\n${state.patternSpace}`;
+    state.holdChomped = state.chomped;
     break;
-    case "get": state.patternSpace = state.holdSpace; break;
-    case "getAppend": state.patternSpace += `\n${state.holdSpace}`; break;
-    case "exchange": { const temp = state.patternSpace; state.patternSpace = state.holdSpace; state.holdSpace = temp; break; }
+    case "get": state.patternSpace = state.holdSpace; state.chomped = state.holdChomped; break;
+    case "getAppend": state.patternSpace += `\n${state.holdSpace}`; state.chomped = state.holdChomped; break;
+    case "exchange": {
+      const temp = state.patternSpace; state.patternSpace = state.holdSpace; state.holdSpace = temp;
+      const tempC = state.chomped; state.chomped = state.holdChomped; state.holdChomped = tempC;
+      break;
+    }
     case "next": state.printed = true; break;
     case "quit": state.quit = true; if (cmd.exitCode !== undefined) state.exitCode = cmd.exitCode; break;
     case "quitSilent": state.quit = true; state.quitSilent = true; if (cmd.exitCode !== undefined) state.exitCode = cmd.exitCode; break;
-    case "list": state.lineNumberOutput.push(escapeForList(state.patternSpace)); break;
-    case "printFilename": if (state.currentFilename) state.lineNumberOutput.push(state.currentFilename); break;
-    case "readFile": state.pendingFileReads.push({ filename: cmd.filename, wholeFile: true }); break;
-    case "readFileLine": state.pendingFileReads.push({ filename: cmd.filename, wholeFile: false }); break;
+    case "list": ctx.builder.write(escapeForList(state.patternSpace), true); break;
+    case "printFilename": if (state.currentFilename) ctx.builder.write(state.currentFilename, true); break;
+    case "readFile": state.deferredOutput.push({ type: "r", filename: cmd.filename, wholeFile: true }); break;
+    case "readFileLine": state.deferredOutput.push({ type: "r", filename: cmd.filename, wholeFile: false }); break;
     case "writeFile": state.pendingFileWrites.push({ filename: cmd.filename, content: `${state.patternSpace}\n` }); break;
     case "writeFirstLine": { const newlineIdx = state.patternSpace.indexOf("\n"); state.pendingFileWrites.push({ filename: cmd.filename, content: `${newlineIdx !== -1 ? state.patternSpace.slice(0, newlineIdx) : state.patternSpace}\n` }); break; }
     case "execute": {
       if (cmd.command) {
-        if (shell) { let out = await shell(cmd.command); if (out.endsWith("\n")) out = out.slice(0, -1); state.lineNumberOutput.push(out); } 
+        if (shell) { let out = await shell(cmd.command); if (out.endsWith("\n")) out = out.slice(0, -1); ctx.builder.write(out, true); }
         else { state.errorMessage = "sed: e command requires a shell executor"; state.quit = true; }
       } else {
         if (shell) { let out = await shell(state.patternSpace); if (out.endsWith("\n")) out = out.slice(0, -1); state.patternSpace = out; } 
@@ -787,41 +939,93 @@ async function executeCommand(cmd, state, shell) {
       break;
     }
     case "transliterate": { let result = ""; for (const char of state.patternSpace) { const idx = cmd.source.indexOf(char); result += idx !== -1 ? cmd.dest[idx] : char; } state.patternSpace = result; break; }
-    case "lineNumber": state.lineNumberOutput.push(String(state.lineNumber)); break;
+    case "lineNumber": ctx.builder.write(String(state.lineNumber), true); break;
   }
 }
 
-async function executeCommands(commands, state, ctx, shell) {
+// GNU sed compiles the whole script into one flat instruction list, so a
+// label defined inside a `{...}` block is visible to branches outside it
+// (and vice versa). Our parser produces a nested tree (groups hold their
+// own `commands` array), so we flatten it here: a group becomes a
+// "groupStart" (address-gated conditional skip) followed by its body and a
+// "groupEnd" marker, with the groupStart's skip target computed to land
+// just past the matching groupEnd.
+function flattenCommands(commands) {
+  const flat = [];
+  function visit(cmds) {
+    for (const cmd of cmds) {
+      if (cmd.type === "group") {
+        const startIdx = flat.length;
+        flat.push({ type: "groupStart", address: cmd.address, endIndex: null });
+        visit(cmd.commands);
+        flat.push({ type: "groupEnd" });
+        flat[startIdx].endIndex = flat.length;
+      } else {
+        flat.push(cmd);
+      }
+    }
+  }
+  visit(commands);
+  return flat;
+}
+
+function buildLabelIndex(flatCommands) {
   const labelIndex = new Map();
-  for (let i = 0; i < commands.length; i++) if (commands[i].type === "label") labelIndex.set(commands[i].name, i);
+  for (let i = 0; i < flatCommands.length; i++) if (flatCommands[i].type === "label") labelIndex.set(flatCommands[i].name, i);
+  return labelIndex;
+}
+
+async function executeCommands(commands, labelIndex, state, ctx, shell) {
   let i = 0;
+  let steps = 0;
+  const MAX_STEPS = 100_000;
   while (i < commands.length) {
     if (state.deleted || state.quit || state.quitSilent || state.restartCycle) break;
+    steps++;
+    if (steps > MAX_STEPS || state.patternSpace.length > 20_000_000) {
+      throw new Error("sed: step/size limit exceeded (possible infinite loop in script)");
+    }
     const cmd = commands[i];
 
+    if (cmd.type === "label" || cmd.type === "groupEnd") { i++; continue; }
+
+    if (cmd.type === "groupStart") {
+      const addrResult = isInRange(cmd.address, state.lineNumber, state.totalLines, state.patternSpace, state.rangeStates, state);
+      if (!addrResult.matched) { i = cmd.endIndex; continue; }
+      i++; continue;
+    }
+
     if (cmd.type === "next") {
-      if (isInRange(cmd.address, state.lineNumber, state.totalLines, state.patternSpace, state.rangeStates, state)) {
-        state.nCommandOutput.push(state.patternSpace);
+      if (isInRange(cmd.address, state.lineNumber, state.totalLines, state.patternSpace, state.rangeStates, state).matched) {
+        if (!(ctx && ctx.silent)) ctx.builder.write(state.patternSpace, state.chomped);
         if (ctx && ctx.currentLineIndex + state.linesConsumedInCycle + 1 < ctx.lines.length) {
-          state.linesConsumedInCycle++; state.patternSpace = ctx.lines[ctx.currentLineIndex + state.linesConsumedInCycle];
-          state.lineNumber = ctx.currentLineIndex + state.linesConsumedInCycle + 1; state.substitutionMade = false;
+          if (ctx.flushDeferred) ctx.flushDeferred(state);
+          state.linesConsumedInCycle++;
+          const newIdx = ctx.currentLineIndex + state.linesConsumedInCycle;
+          state.patternSpace = ctx.lines[newIdx];
+          state.chomped = ctx.chompedFor(newIdx);
+          state.lineNumber = newIdx + 1; state.substitutionMade = false;
         } else { state.quit = true; state.deleted = true; break; }
       }
       i++; continue;
     }
 
     if (cmd.type === "nextAppend") {
-      if (isInRange(cmd.address, state.lineNumber, state.totalLines, state.patternSpace, state.rangeStates, state)) {
+      if (isInRange(cmd.address, state.lineNumber, state.totalLines, state.patternSpace, state.rangeStates, state).matched) {
         if (ctx && ctx.currentLineIndex + state.linesConsumedInCycle + 1 < ctx.lines.length) {
-          state.linesConsumedInCycle++; state.patternSpace += `\n${ctx.lines[ctx.currentLineIndex + state.linesConsumedInCycle]}`;
-          state.lineNumber = ctx.currentLineIndex + state.linesConsumedInCycle + 1;
-        } else { state.quit = true; break; }
+          if (ctx.flushDeferred) ctx.flushDeferred(state);
+          state.linesConsumedInCycle++;
+          const newIdx = ctx.currentLineIndex + state.linesConsumedInCycle;
+          state.patternSpace += `\n${ctx.lines[newIdx]}`;
+          state.chomped = ctx.chompedFor(newIdx);
+          state.lineNumber = newIdx + 1; state.substitutionMade = false;
+        } else { state.quit = true; if (state.posix) state.deleted = true; break; }
       }
       i++; continue;
     }
 
    if (["branch", "branchOnSubst", "branchOnNoSubst"].includes(cmd.type)) {
-      if (isInRange(cmd.address, state.lineNumber, state.totalLines, state.patternSpace, state.rangeStates, state)) {
+      if (isInRange(cmd.address, state.lineNumber, state.totalLines, state.patternSpace, state.rangeStates, state).matched) {
         const shouldBranch =
           cmd.type === "branch" ||
           (cmd.type === "branchOnSubst" && state.substitutionMade) ||
@@ -842,19 +1046,7 @@ async function executeCommands(commands, state, ctx, shell) {
       i++; continue;
     }
 
-    if (cmd.type === "group") {
-      if (isInRange(cmd.address, state.lineNumber, state.totalLines, state.patternSpace, state.rangeStates, state)) {
-        await executeCommands(cmd.commands, state, ctx, shell);
-        if (state.branchRequest) {
-          const target = labelIndex.get(state.branchRequest);
-          if (target !== undefined) { state.branchRequest = undefined; i = target; continue; }
-          break;
-        }
-      }
-      i++; continue;
-    }
-
-    await executeCommand(cmd, state, shell); i++;
+    await executeCommand(cmd, state, ctx, shell); i++;
   }
   return state.linesConsumedInCycle;
 }
@@ -864,57 +1056,74 @@ async function executeCommands(commands, state, ctx, shell) {
 // ==========================================
 
 async function processContent(content, commands, silent, options = {}) {
-  const { filename, vfs, shell } = options;
+  const { filename, vfs, shell, extendedRegex, posix } = options;
   const lines = content.split("\n");
   const endsWithNewline = content.endsWith("\n");
   if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
 
-  const totalLines = lines.length; let output = ""; let exitCode;
-  const appendOutput = text => { output += text; };
+  const totalLines = lines.length; let exitCode;
+  const builder = makeOutputBuilder();
+  // Only the very last physical line can be "not chomped" (i.e. lack a
+  // trailing newline in the original input); every other line was
+  // necessarily terminated by "\n" when we split on it.
+  const chompedFor = idx => (idx === lines.length - 1) ? endsWithNewline : true;
 
-  let holdSpace = ""; let lastPattern; const rangeStates = new Map();
+  const flatCommands = flattenCommands(commands);
+  const labelIndex = buildLabelIndex(flatCommands);
+
+  let holdSpace = ""; let holdChomped = true; let lastPattern; const rangeStates = new Map();
   const fileLineCache = new Map(); const fileLinePositions = new Map(); const fileWrites = new Map();
 
+  // Deferred output (from `a`, `r`, `R`) is queued on state.deferredOutput
+  // and flushed -- in order -- either when `n`/`N` performs a fresh read
+  // (matching GNU sed's dump_append_queue-inside-read_pattern_space
+  // behavior) or at the natural end of the current cycle.
+  function flushDeferred(state) {
+    for (const item of state.deferredOutput) {
+      let text = item.text; let chomped = item.chomped; let resolved = item.type !== "r";
+      if (item.type === "r" && vfs) {
+        const filePath = item.filename;
+        try {
+          if (item.wholeFile) {
+            if (vfs[filePath] !== undefined) { text = vfs[filePath].replace(/\n$/, ""); chomped = true; resolved = true; }
+          } else {
+            if (!fileLineCache.has(filePath)) { if (vfs[filePath] !== undefined) { fileLineCache.set(filePath, vfs[filePath].split("\n")); fileLinePositions.set(filePath, 0); } }
+            const fileLines = fileLineCache.get(filePath); const pos = fileLinePositions.get(filePath);
+            if (fileLines && pos !== undefined && pos < fileLines.length) { text = fileLines[pos]; chomped = true; resolved = true; fileLinePositions.set(filePath, pos + 1); }
+          }
+        } catch (e) { /* ignore */ }
+      }
+      if (resolved) builder.write(text, chomped);
+    }
+    state.deferredOutput = [];
+  }
+
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
-    const state = { ...createInitialState(totalLines, filename, rangeStates), patternSpace: lines[lineIndex], holdSpace, lastPattern, lineNumber: lineIndex + 1 };
-    const ctx = { lines, currentLineIndex: lineIndex };
+    const state = {
+      ...createInitialState(totalLines, filename, rangeStates, extendedRegex, posix),
+      patternSpace: lines[lineIndex], chomped: chompedFor(lineIndex),
+      holdSpace, holdChomped, lastPattern, lineNumber: lineIndex + 1
+    };
+    const ctx = { lines, currentLineIndex: lineIndex, silent, chompedFor, builder, flushDeferred };
 
     let cycleIterations = 0; state.linesConsumedInCycle = 0;
     do {
       cycleIterations++; if (cycleIterations > 10000) break;
-      state.restartCycle = false; state.pendingFileReads =[]; state.pendingFileWrites =[];
-      await executeCommands(commands, state, ctx, shell);
-
-      if (vfs) {
-        for (const read of state.pendingFileReads) {
-          const filePath = read.filename;
-          try {
-            if (read.wholeFile) { if (vfs[filePath] !== undefined) state.appendBuffer.push(vfs[filePath].replace(/\n$/, "")); }
-            else {
-              if (!fileLineCache.has(filePath)) { if (vfs[filePath] !== undefined) { fileLineCache.set(filePath, vfs[filePath].split("\n")); fileLinePositions.set(filePath, 0); } }
-              const fileLines = fileLineCache.get(filePath); const pos = fileLinePositions.get(filePath);
-              if (fileLines && pos !== undefined && pos < fileLines.length) { state.appendBuffer.push(fileLines[pos]); fileLinePositions.set(filePath, pos + 1); }
-            }
-          } catch (e) { /* Ignore */ }
-        }
-        for (const write of state.pendingFileWrites) { const filePath = write.filename; fileWrites.set(filePath, (fileWrites.get(filePath) || "") + write.content); }
-      }
+      state.restartCycle = false; state.pendingFileWrites = [];
+      await executeCommands(flatCommands, labelIndex, state, ctx, shell);
+      for (const write of state.pendingFileWrites) { const filePath = write.filename; fileWrites.set(filePath, (fileWrites.get(filePath) || "") + write.content); }
     } while (state.restartCycle && !state.deleted && !state.quit && !state.quitSilent);
 
-    lineIndex += state.linesConsumedInCycle; holdSpace = state.holdSpace; lastPattern = state.lastPattern;
+    lineIndex += state.linesConsumedInCycle;
+    holdSpace = state.holdSpace; holdChomped = state.holdChomped; lastPattern = state.lastPattern;
 
-    if (!silent) for (const ln of state.nCommandOutput) appendOutput(`${ln}\n`);
-    for (const ln of state.lineNumberOutput) appendOutput(`${ln}\n`);
+    // Natural end-of-cycle auto-print (suppressed entirely by -n / -silent,
+    // and skipped if the pattern space was deleted or `q`-silently quit).
+    if (!state.deleted && !state.quitSilent && !silent) {
+      builder.write(state.patternSpace, state.chomped);
+    }
 
-    const inserts =[]; const appends =[];
-    for (const item of state.appendBuffer) { if (item.startsWith("__INSERT__")) inserts.push(item.slice(10)); else appends.push(item); }
-    for (const text of inserts) appendOutput(`${text}\n`);
-
-    if (!state.deleted && !state.quitSilent) {
-      if (silent) { if (state.printed) appendOutput(`${state.patternSpace}\n`); }
-      else { appendOutput(`${state.patternSpace}\n`); }
-    } else if (state.changedText !== undefined) { appendOutput(`${state.changedText}\n`); }
-    for (const text of appends) appendOutput(`${text}\n`);
+    flushDeferred(state);
 
     if (state.quit || state.quitSilent) {
       if (state.exitCode !== undefined) exitCode = state.exitCode;
@@ -922,12 +1131,9 @@ async function processContent(content, commands, silent, options = {}) {
     }
   }
 
-  if (vfs) { for (const[filePath, fileContent] of fileWrites) vfs[filePath] = fileContent; }
-  
+  if (vfs) { for (const [filePath, fileContent] of fileWrites) vfs[filePath] = fileContent; }
 
-  if (endsWithNewline && output.length > 0) output += "\n";
-  if (output.endsWith("\n")) output = output.slice(0, -1);
-  return { output, exitCode };
+  return { output: builder.result(), exitCode };
 }
 
 // ==========================================
@@ -1101,7 +1307,7 @@ export default async function sed(commandStr, options = {}) {
   let stdin = options.stdin !== undefined ? options.stdin : "";
   if (stdin === null) stdin = "";
 
-  const scripts = []; let silent = false; let inPlace = false; let extendedRegex = false; const files = [];
+  const scripts = []; let silent = false; let inPlace = false; let extendedRegex = false; let posix = !!options.posix; const files = [];
   let implicitScript = [];
 
   if (args.length === 0 || (args.length === 1 && args[0].trim() === '')) {
@@ -1125,6 +1331,7 @@ export default async function sed(commandStr, options = {}) {
         scripts.push(vfs[scriptFile]);
       }
     }
+    else if (arg === "--posix") posix = true;
     else if (arg.startsWith("--")) throw new Error(`sed: unknown option ${arg}`);
     else if (arg === "-") files.push(arg);
     else if (arg.startsWith("-") && arg.length > 1) {
@@ -1166,10 +1373,11 @@ export default async function sed(commandStr, options = {}) {
   if (implicitScript.length > 0) scripts.push(implicitScript.join(" "));
   if (scripts.length === 0) scripts.push("");
 
-  const { commands, error, silentMode } = parseMultipleScripts(scripts, extendedRegex);
+  const { commands, error, silentMode, extendedRegexMode } = parseMultipleScripts(scripts, extendedRegex, posix);
   if (error) throw new Error(`sed: ${error}`);
 
   const effectiveSilent = !!(silent || silentMode);
+  const effectiveExtendedRegex = !!(extendedRegex || extendedRegexMode);
 
   if (inPlace) {
     if (files.length === 0) throw new Error("sed: -i requires at least one file argument");
@@ -1177,7 +1385,7 @@ export default async function sed(commandStr, options = {}) {
       if (file === "-") continue;
       if (!(file in vfs)) throw new Error(`sed: ${file}: No such file or directory`);
       const fileContent = vfs[file];
-      const result = await processContent(fileContent, commands, effectiveSilent, { filename: file, vfs, shell });
+      const result = await processContent(fileContent, commands, effectiveSilent, { filename: file, vfs, shell, extendedRegex: effectiveExtendedRegex, posix });
       if (result.errorMessage) throw new Error(result.errorMessage);
       vfs[file] = result.output;
     }
@@ -1187,7 +1395,7 @@ export default async function sed(commandStr, options = {}) {
   let content = "";
   if (files.length === 0) {
     content = stdin;
-    const result = await processContent(content, commands, effectiveSilent, { vfs, shell });
+    const result = await processContent(content, commands, effectiveSilent, { vfs, shell, extendedRegex: effectiveExtendedRegex, posix });
     if (result.errorMessage) throw new Error(result.errorMessage);
     return result.output;
   }
@@ -1204,7 +1412,7 @@ export default async function sed(commandStr, options = {}) {
     content += fileContent;
   }
 
-  const result = await processContent(content, commands, effectiveSilent, { filename: files.length === 1 ? files[0] : undefined, vfs, shell });
+  const result = await processContent(content, commands, effectiveSilent, { filename: files.length === 1 ? files[0] : undefined, vfs, shell, extendedRegex: effectiveExtendedRegex, posix });
   if (result.errorMessage) throw new Error(result.errorMessage);
   return result.output;
 }
