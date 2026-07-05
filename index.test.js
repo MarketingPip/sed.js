@@ -76,7 +76,7 @@ async function runSystemSed(args, stdin = null) {
       return {
         success: false,
         data: null,
-        error: normalizeEol(result.error.message || String(result.error)),
+        error: normalizeEol(result.stderr || result.error.message || String(result.error)),
       };
     }
 
