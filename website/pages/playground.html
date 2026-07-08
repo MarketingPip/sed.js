@@ -21,7 +21,7 @@
                 <h1 class="text-xl font-bold tracking-tight">sed<span class="text-indigo-400">js</span> Playground</h1>
             </div>
             <div class="flex gap-4 text-sm font-medium">
-                <span class="px-3 py-1 rounded-full bg-slate-800 border border-slate-700">POSIX Compliant</span>
+                <span id="modeBadge" class="px-3 py-1 rounded-full bg-slate-800 border border-slate-700 transition-colors">GNU Mode</span>
                 <span class="px-3 py-1 rounded-full bg-green-900/30 text-green-400 border border-green-800/50">v1.0.4-stable</span>
             </div>
         </div>
@@ -42,9 +42,21 @@
 
                     <div class="space-y-4">
                       <div>
-                        <label class="block text-[10px] uppercase tracking-wider font-bold text-slate-500 mb-2">Current Snippet</label>
+                        <div class="flex items-center justify-between mb-2 px-1">
+                          <label class="block text-[10px] uppercase tracking-wider font-bold text-slate-500">Current Snippet</label>
+
+                          <label class="flex items-center gap-2 group cursor-pointer select-none" title="Mirrors real sed's --posix: rejects GNU extensions (first~step, +N addresses, a/i/= with a range, one-liner a/i/c text, etc.) instead of running them.">
+                            <span id="posixLabel" class="text-[10px] font-bold text-slate-600 group-hover:text-slate-400 transition-colors uppercase">Strict POSIX (--posix)</span>
+                            <div class="relative flex items-center">
+                              <input type="checkbox" id="enablePosix" class="peer appearance-none w-4 h-4 border border-slate-700 rounded bg-slate-900 checked:bg-amber-600 checked:border-amber-500 transition-all cursor-pointer">
+                              <svg class="absolute w-3 h-3 text-white pointer-events-none hidden peer-checked:block left-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="4">
+                                <path d="M5 13l4 4L19 7" />
+                              </svg>
+                            </div>
+                          </label>
+                        </div>
                         <div class="relative group">
-                          <textarea id="commandArea" class="w-full h-32 bg-slate-950 border border-slate-800 rounded-lg p-4 font-mono text-sm text-indigo-300 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/20 focus:outline-none transition-all resize-none shadow-inner" spellcheck="false">-e 's/[a-z]/\U&/g' -e '/[AEIOU]/ { h; s/./*/g; G; s/\\n/ /; }'</textarea>
+                          <textarea id="commandArea" class="w-full h-32 bg-slate-950 border border-slate-800 rounded-lg p-4 font-mono text-sm text-indigo-300 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/20 focus:outline-none transition-all resize-none shadow-inner" spellcheck="false">-e 's/[a-z]/\U&/g' -e '/[AEIOU]/ { h; s/./*/g; G; s/\n/ /; }'</textarea>
                         </div>
                       </div>
                     
@@ -66,7 +78,8 @@
                         <div class="relative">
                           <textarea id="stdin" 
                             class="w-full h-32 bg-slate-950 border border-slate-800 rounded-lg p-4 font-mono text-sm  focus:outline-none transition-all resize-none" 
-                            spellcheck="false">sed is powerful\\nxyz</textarea>
+                            spellcheck="false">sed is powerful
+xyz</textarea>
                           <div id="disabledOverlay" class="absolute inset-0 rounded-lg pointer-events-none border border-transparent transition-all"></div>
                         </div>
                       </div>
@@ -92,6 +105,14 @@
                 <button onclick="loadSnippet('complex')" class="group p-4 bg-slate-900 border border-slate-800 rounded-xl hover:border-purple-500 transition-all text-left">
                     <h3 class="font-bold text-purple-400 group-hover:text-purple-300">JSON Manipulation</h3>
                     <p class="text-xs text-slate-500 mt-1">Target specific keys in config.json.</p>
+                </button>
+                <button onclick="loadSnippet('branchjoin')" class="group p-4 bg-slate-900 border border-slate-800 rounded-xl hover:border-sky-500 transition-all text-left">
+                    <h3 class="font-bold text-sky-400 group-hover:text-sky-300">Branch &amp; Join Lines</h3>
+                    <p class="text-xs text-slate-500 mt-1">Classic :a;N;$!ba loop on myfile.txt.</p>
+                </button>
+                <button onclick="loadSnippet('exitcode')" class="group p-4 bg-slate-900 border border-slate-800 rounded-xl hover:border-rose-500 transition-all text-left">
+                    <h3 class="font-bold text-rose-400 group-hover:text-rose-300">Exit Codes (q/Q)</h3>
+                    <p class="text-xs text-slate-500 mt-1">Quit early with a custom exit status.</p>
                 </button>
             </div>
         </div>
