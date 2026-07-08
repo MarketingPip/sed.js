@@ -8,6 +8,11 @@ function stdinActive(){
   return checkbox.checked === true;
 }
 
+function posixActive(){
+  const checkbox = document.getElementById('enablePosix');
+  return checkbox.checked === true;
+}
+
         // Playground State
         let myVfs = {
             "notes.txt": "hello universe",
@@ -21,7 +26,18 @@ world foo hello`
             basic: `s/hello/hi/ notes.txt`,
             inplace: `-i s/universe/world/ notes.txt`,
             stdin: `s/a/b/g`, // set place holder "an apple a day"
-            complex: `-i s/dev/prod/ config.json`
+            complex: `-i s/dev/prod/ config.json`,
+            // Classic "join every line with a comma" idiom. Exercises N/branch
+            // handling across the whole file (not just one line at a time) --
+            // the label/branch and append-flush-timing fixes both live here.
+            // Quoted via -e per fragment, same as the 'complex' example above --
+            // an unquoted multi-line script with embedded spaces would mis-tokenize
+            // here exactly like it would in a real unquoted shell command.
+            branchjoin: `-e ':a' -e 'N' -e '$!ba' -e 's/\\n/, /g' myfile.txt`,
+            // q/Q accept a custom exit code. Toggle "exitCode" reporting in
+            // the terminal output shows this isn't just decorative -- it's
+            // the actual process.exitCode a shell script would see from `$?`.
+            exitcode: `2q5`,
         };
 
         // UI Logic
@@ -30,6 +46,7 @@ world foo hello`
         const commandArea = document.getElementById('commandArea');
        const stdin = document.getElementById('stdin');
         const runBtn = document.getElementById('runBtn');
+        const modeBadge = document.getElementById('modeBadge');
 
         function updateVFSDisplay() {
             vfsMonitor.innerHTML = Object.entries(myVfs).map(([name, content]) => `
@@ -44,7 +61,7 @@ world foo hello`
 
         function log(msg, type = 'info') {
             const div = document.createElement('div');
-            const color = type === 'out' ? 'text-green-400' : 'text-slate-400';
+            const color = type === 'out' ? 'text-green-400' : (type === 'error' ? 'text-rose-400' : 'text-slate-400');
             div.className =  `${color} whitespace-pre-wrap`
             div.innerHTML = `<span class="opacity-50 font-bold">${type === 'out' ? '➜' : '>'}</span> ${msg}`;
             consoleLog.appendChild(div);
@@ -61,14 +78,12 @@ world foo hello`
         runBtn.addEventListener('click', async () => {
             try {
                 const command = commandArea.value;
-              
-              const targetPath = command[command.length - 1];
-              
+
                const _stdin = stdin.value;
-               
+
                 // Wrapping in an async IIFE to allow 'await' in the textarea
               // sed("s/hello/hi/", { vfs: myVfs, stdin: myVfs["notes.txt"] });
-              
+
               async function hello(cmd){
                 console.log(cmd)
                if(cmd === "whoami"){
@@ -76,22 +91,35 @@ world foo hello`
                }else{
                  return "unknown command"
                }
-               
+
               }
-               
+
+              const baseOptions = { vfs: myVfs, shell: hello, posix: posixActive(), exitCode: true };
+
               let result;
               if(stdinActive() === false){
-                result = await sed(command, { vfs: myVfs, shell:hello});
+                result = await sed(command, baseOptions);
               }else{
-                result = await sed(command, { vfs: myVfs, stdin: _stdin, shell:hello});
-              } 
-              
-              //await sed(command)
-                
-                if (result) log(result, 'out');
-                updateVFSDisplay();
+                result = await sed(command, { ...baseOptions, stdin: _stdin });
+              }
+
+              // With { exitCode: true }, sed() always returns { output, exitCode }
+              // instead of a bare string -- unwrap it for display.
+              const { output, exitCode } = result;
+              const exitBadge = `<span class="text-slate-500">(exit ${exitCode})</span>`;
+
+              if (output) {
+                log(`${exitBadge} ${output}`, 'out');
+              } else {
+                // -i writes to the VFS instead of returning output; -n scripts
+                // with no p/print commands also legitimately produce nothing.
+                // Still show the exit code so q/Q-with-no-output isn't silent.
+                log(`${exitBadge} <span class="italic text-slate-600">[no stdout -- check VFS panel for in-place changes]</span>`, 'out');
+              }
+              updateVFSDisplay();
             } catch (err) {
-                log(err.message, 'error');
+                const codeBadge = err.code !== undefined ? `[exit ${err.code}] ` : '';
+                log(`${codeBadge}${err.message}`, 'error');
             }
         });
 
@@ -123,5 +151,23 @@ world foo hello`
       statusLabel.classList.replace('text-indigo-400', 'text-slate-600');
     }
   });
- 
 
+  const posixCheckbox = document.getElementById('enablePosix');
+  const posixLabel = document.getElementById('posixLabel');
+
+  posixCheckbox.addEventListener('change', (e) => {
+    const isPosix = e.target.checked;
+    if (isPosix) {
+      modeBadge.textContent = 'POSIX Mode';
+      modeBadge.classList.remove('bg-slate-800', 'border-slate-700');
+      modeBadge.classList.add('bg-amber-900/30', 'text-amber-400', 'border-amber-800/50');
+      posixLabel.classList.replace('text-slate-600', 'text-amber-400');
+      log('Strict POSIX mode enabled -- GNU extensions (first~step, +N addresses, one-liner a/i/c text, s///I, etc.) will now be rejected.');
+    } else {
+      modeBadge.textContent = 'GNU Mode';
+      modeBadge.classList.add('bg-slate-800', 'border-slate-700');
+      modeBadge.classList.remove('bg-amber-900/30', 'text-amber-400', 'border-amber-800/50');
+      posixLabel.classList.replace('text-amber-400', 'text-slate-600');
+      log('GNU mode restored -- extensions re-enabled.');
+    }
+  });
