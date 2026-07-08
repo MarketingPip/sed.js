@@ -9,6 +9,30 @@
 const POSIX_CLASSES = new Map([["alnum", "a-zA-Z0-9"],["alpha", "a-zA-Z"],["ascii", "\\x00-\\x7F"], ["blank", " \\t"],["cntrl", "\\x00-\\x1F\\x7F"], ["digit", "0-9"],["graph", "!-~"],["lower", "a-z"], ["print", " -~"],["punct", "!-/:-@\\[-`{-~"],["space", " \\t\\n\\r\\f\\v"], ["upper", "A-Z"],["word", "a-zA-Z0-9_"],["xdigit", "0-9A-Fa-f"]
 ]);
 
+// The VFS is a plain object keyed by filename, supplied by the caller. Using
+// bare `vfs[name]` / `name in vfs` is unsafe for filenames like "__proto__",
+// "constructor", or "toString": `in` and property reads walk the prototype
+// chain, so a file that was never set can appear to "exist" (returning
+// Object.prototype itself), and a plain assignment to `vfs.__proto__` is
+// silently ignored rather than creating a real entry. These helpers restrict
+// every VFS access to the object's *own* properties so any filename behaves
+// consistently and predictably.
+function vfsHas(vfs, key) {
+  return vfs != null && Object.prototype.hasOwnProperty.call(vfs, key);
+}
+function vfsGet(vfs, key) {
+  return vfsHas(vfs, key) ? vfs[key] : undefined;
+}
+function vfsSet(vfs, key, value) {
+  Object.defineProperty(vfs, key, { value, writable: true, enumerable: true, configurable: true });
+}
+
+function sedError(message, code) {
+  const err = new Error(message);
+  err.code = code;
+  return err;
+}
+
 function breToEre(pattern, posix = false) {
   let result = ""; let i = 0; let inBracket = false;
   while (i < pattern.length) {
@@ -102,7 +126,7 @@ function normalizeForJs(pattern) {
   return result;
 }
 
-function escapeForList(input) {
+function escapeForList(input, width = 70) {
   const tokens = [];
   for (let i = 0; i < input.length; i++) {
     const ch = input[i]; const code = ch.charCodeAt(0);
@@ -123,10 +147,9 @@ function escapeForList(input) {
   // sequences (e.g. "\\", "\t", octal codes) are never split across the
   // wrap boundary -- if a token doesn't fully fit, it's deferred whole to
   // the next line.
-  const width = 70;
   let wrapped = ""; let lineLen = 0;
   for (const tok of tokens) {
-    if (lineLen + tok.length > width - 1) { wrapped += "\\\n"; lineLen = 0; }
+    if (width > 0 && lineLen + tok.length > width - 1) { wrapped += "\\\n"; lineLen = 0; }
     wrapped += tok; lineLen += tok.length;
   }
   wrapped += "$";
@@ -257,12 +280,18 @@ class SedLexer {
     // line-wrap width); everything else must be followed only by
     // whitespace and a terminator (newline, ;, }, comment, or EOF).
     while (this.peek() === " " || this.peek() === "\t") this.advance();
-    if ("qQl".includes(ch)) { while (this.isDigit(this.peek())) this.advance(); while (this.peek() === " " || this.peek() === "\t") this.advance(); }
+    let numArg;
+    if ("qQl".includes(ch)) {
+      let numStr = "";
+      while (this.isDigit(this.peek())) numStr += this.advance();
+      if (numStr !== "") numArg = parseInt(numStr, 10);
+      while (this.peek() === " " || this.peek() === "\t") this.advance();
+    }
     const next = this.peek();
     if (next !== "" && next !== "\n" && next !== ";" && next !== "}" && next !== "#") {
       return { type: SedTokenType.ERROR, value: "extra characters after command", line: startLine, column: startColumn };
     }
-    return { type: SedTokenType.COMMAND, value: ch, line: startLine, column: startColumn };
+    return { type: SedTokenType.COMMAND, value: ch, numArg, line: startLine, column: startColumn };
   }
   readSubstitute(startLine, startColumn) {
     const delimiter = this.advance();
@@ -311,6 +340,31 @@ class SedLexer {
       if (allowedFlags.includes(ch) || this.isDigit(ch)) flags += this.advance(); 
       else break; 
     }
+
+    // Optional trailing `w filename` flag (POSIX): consumes the rest of the
+    // line as the filename, same as the standalone `w` command.
+    let writeFilename;
+    {
+      const savedPos = this.pos;
+      while (this.peek() === " " || this.peek() === "\t") this.advance();
+      if (this.peek() === "w") {
+        this.advance();
+        while (this.peek() === " " || this.peek() === "\t") this.advance();
+        let filename = "";
+        while (this.pos < this.input.length && this.peek() !== "\n") filename += this.advance();
+        writeFilename = filename.trim();
+      } else {
+        this.pos = savedPos;
+      }
+    }
+
+    if (writeFilename === undefined) {
+      while (this.peek() === " " || this.peek() === "\t") this.advance();
+      const next = this.peek();
+      if (next !== "" && next !== "\n" && next !== ";" && next !== "}" && next !== "#") {
+        return { type: SedTokenType.ERROR, value: "unknown option to `s'", line: startLine, column: startColumn };
+      }
+    }
     
     let nthOccurrence;
     const numMatch = flags.match(/(\d+)/); 
@@ -327,6 +381,7 @@ class SedLexer {
       printOnMatch: flags.includes("p"), 
       executeShell: flags.includes("e"), 
       nthOccurrence,
+      writeFilename,
       line: startLine, 
       column: startColumn
     };
@@ -484,7 +539,10 @@ class SedParser {
       if (this.posix && "q=l".includes(cmd) && address && address.end !== undefined) {
         return { command: null, error: "command only uses one address" };
       }
-      return { command: { type: map[cmd], address } };
+      const extra = {};
+      if ((cmd === "q" || cmd === "Q") && token.numArg !== undefined) extra.exitCode = token.numArg;
+      if (cmd === "l" && token.numArg !== undefined) extra.listWidth = token.numArg;
+      return { command: { type: map[cmd], address, ...extra } };
     }
     return { command: null, error: `unknown command: ${cmd}` };
   }
@@ -575,7 +633,7 @@ function parseMultipleScripts(scripts, extendedRegex = false, posix = false) {
   }
   collectLabels(result.commands);
   const labelError = checkBranches(result.commands);
-  if (labelError) return { commands: [], error: labelError, silentMode, extendedRegexMode: extendedRegexFromComment };
+  if (labelError) return { commands: [], error: labelError, errorCode: 4, silentMode, extendedRegexMode: extendedRegexFromComment };
 
   return { ...result, silentMode, extendedRegexMode: extendedRegexFromComment };
 }
@@ -613,7 +671,7 @@ function makeOutputBuilder() {
       buf += text;
       if (chomped) buf += "\n"; else pending = true;
       if (buf.length > MAX_OUTPUT_SIZE) {
-        throw new Error("sed: output size limit exceeded (possible infinite loop in script)");
+        throw sedError("sed: output size limit exceeded (possible infinite loop in script)", 1);
       }
     },
     result() { return buf; }
@@ -885,6 +943,7 @@ async function executeCommand(cmd, state, ctx, shell) {
             state.substitutionMade = true;
             state.patternSpace = result;
             if (cmd.printOnMatch) ctx.builder.write(state.patternSpace, state.chomped);
+            if (cmd.writeFilename) state.pendingFileWrites.push({ filename: cmd.writeFilename, content: `${state.patternSpace}\n` });
           }
         }
       } catch (e) { /* ignore */ }
@@ -922,7 +981,7 @@ async function executeCommand(cmd, state, ctx, shell) {
     case "next": state.printed = true; break;
     case "quit": state.quit = true; if (cmd.exitCode !== undefined) state.exitCode = cmd.exitCode; break;
     case "quitSilent": state.quit = true; state.quitSilent = true; if (cmd.exitCode !== undefined) state.exitCode = cmd.exitCode; break;
-    case "list": ctx.builder.write(escapeForList(state.patternSpace), true); break;
+    case "list": ctx.builder.write(escapeForList(state.patternSpace, cmd.listWidth !== undefined ? cmd.listWidth : (ctx.defaultListWidth !== undefined ? ctx.defaultListWidth : 70)), true); break;
     case "printFilename": if (state.currentFilename) ctx.builder.write(state.currentFilename, true); break;
     case "readFile": state.deferredOutput.push({ type: "r", filename: cmd.filename, wholeFile: true }); break;
     case "readFileLine": state.deferredOutput.push({ type: "r", filename: cmd.filename, wholeFile: false }); break;
@@ -983,7 +1042,7 @@ async function executeCommands(commands, labelIndex, state, ctx, shell) {
     if (state.deleted || state.quit || state.quitSilent || state.restartCycle) break;
     steps++;
     if (steps > MAX_STEPS || state.patternSpace.length > 20_000_000) {
-      throw new Error("sed: step/size limit exceeded (possible infinite loop in script)");
+      throw sedError("sed: step/size limit exceeded (possible infinite loop in script)", 1);
     }
     const cmd = commands[i];
 
@@ -1035,8 +1094,11 @@ async function executeCommands(commands, labelIndex, state, ctx, shell) {
           if (cmd.label) {
             const target = labelIndex.get(cmd.label);
             if (target !== undefined) { i = target; continue; }
-            // Label not found — error like real sed
+            // Label not found — error like real sed (unreachable in practice
+            // since compile-time validation already catches this, kept as a
+            // defensive fallback)
             state.errorMessage = `sed: can't find label for jump to \`${cmd.label}'`;
+            state.errorCode = 4;
             state.quit = true;
             break;
           }
@@ -1085,9 +1147,9 @@ async function processContent(content, commands, silent, options = {}) {
         const filePath = item.filename;
         try {
           if (item.wholeFile) {
-            if (vfs[filePath] !== undefined) { text = vfs[filePath].replace(/\n$/, ""); chomped = true; resolved = true; }
+            if (vfsHas(vfs, filePath)) { text = vfsGet(vfs, filePath).replace(/\n$/, ""); chomped = true; resolved = true; }
           } else {
-            if (!fileLineCache.has(filePath)) { if (vfs[filePath] !== undefined) { fileLineCache.set(filePath, vfs[filePath].split("\n")); fileLinePositions.set(filePath, 0); } }
+            if (!fileLineCache.has(filePath)) { if (vfsHas(vfs, filePath)) { fileLineCache.set(filePath, vfsGet(vfs, filePath).split("\n")); fileLinePositions.set(filePath, 0); } }
             const fileLines = fileLineCache.get(filePath); const pos = fileLinePositions.get(filePath);
             if (fileLines && pos !== undefined && pos < fileLines.length) { text = fileLines[pos]; chomped = true; resolved = true; fileLinePositions.set(filePath, pos + 1); }
           }
@@ -1127,11 +1189,11 @@ async function processContent(content, commands, silent, options = {}) {
 
     if (state.quit || state.quitSilent) {
       if (state.exitCode !== undefined) exitCode = state.exitCode;
-      if (state.errorMessage) return { output: "", exitCode: exitCode || 1, errorMessage: state.errorMessage }; break;
+      if (state.errorMessage) return { output: "", exitCode: exitCode || 1, errorMessage: state.errorMessage, errorCode: state.errorCode }; break;
     }
   }
 
-  if (vfs) { for (const [filePath, fileContent] of fileWrites) vfs[filePath] = fileContent; }
+  if (vfs) { for (const [filePath, fileContent] of fileWrites) vfsSet(vfs, filePath, fileContent); }
 
   return { output: builder.result(), exitCode };
 }
@@ -1311,7 +1373,7 @@ export default async function sed(commandStr, options = {}) {
   let implicitScript = [];
 
   if (args.length === 0 || (args.length === 1 && args[0].trim() === '')) {
-    throw new Error('sed: no script command!');
+    throw sedError('sed: no script command!', 1);
   };
   
 
@@ -1322,40 +1384,56 @@ export default async function sed(commandStr, options = {}) {
     else if (["-E", "-r", "--regexp-extended"].includes(arg)) extendedRegex = true;
     else if (arg === "-e") {
       if (i + 1 < args.length) scripts.push(args[++i]);
-      else throw new Error('sed: option requires an argument -- e');
+      else throw sedError('sed: option requires an argument -- e', 1);
     }
     else if (arg === "-f") {
       if (i + 1 < args.length) {
         const scriptFile = args[++i];
-        if (!(scriptFile in vfs)) throw new Error(`sed: ${scriptFile}: No such file or directory`);
-        scripts.push(vfs[scriptFile]);
+        if (!vfsHas(vfs, scriptFile)) throw sedError(`sed: couldn't open file ${scriptFile}: No such file or directory`, 2);
+        scripts.push(vfsGet(vfs, scriptFile));
       }
     }
     else if (arg === "--posix") posix = true;
-    else if (arg.startsWith("--")) throw new Error(`sed: unknown option ${arg}`);
+    else if (arg.startsWith("--")) throw sedError(`sed: unknown option ${arg}`, 1);
     else if (arg === "-") files.push(arg);
     else if (arg.startsWith("-") && arg.length > 1) {
       const knownFlags = new Set(['n', 'i', 'e', 'E', 'r', 'f']);
       for (const ch of arg.slice(1)) {
-        if (!knownFlags.has(ch)) throw new Error(`sed: invalid option -- '${ch}'`);
+        if (!knownFlags.has(ch)) throw sedError(`sed: invalid option -- '${ch}'`, 1);
       }
       if (arg.includes("n")) silent = true;
       if (arg.includes("i")) inPlace = true;
       if (arg.includes("E") || arg.includes("r")) extendedRegex = true;
       if (arg.includes("f") && i + 1 < args.length) {
         const scriptFile = args[++i];
-        if (!(scriptFile in vfs)) throw new Error(`sed: ${scriptFile}: No such file or directory`);
-        scripts.push(vfs[scriptFile]);
+        if (!vfsHas(vfs, scriptFile)) throw sedError(`sed: couldn't open file ${scriptFile}: No such file or directory`, 2);
+        scripts.push(vfsGet(vfs, scriptFile));
       } else if (arg.includes("e") && !arg.includes("n") && !arg.includes("i") && i + 1 < args.length) {
         scripts.push(args[++i]);
       }
     } else {
-      if (inPlace || options.stdin === undefined || options.stdin === null) {
-        if (scripts.length === 0 && implicitScript.length === 0) implicitScript.push(arg);
-        else files.push(arg);
-      } else {
-        implicitScript.push(arg);
-      }
+      // Real sed classifies a bare argument as "the script" only when no
+      // script has been supplied yet (via -e/-f, or as an earlier bare
+      // arg); every other bare argument is a file operand -- this is what
+      // we do below, and it's correctly independent of whether stdin
+      // happens to be piped (file operands always take priority over
+      // stdin for content; see the file-vs-stdin selection further down).
+      //
+      // There's one wrinkle our own string-mode tokenizer has that a real
+      // shell wouldn't: a sed script frequently contains literal
+      // unquoted spaces (e.g. the replacement text in "s/\n/ /"), and
+      // unlike a real shell we have no quoting information telling us
+      // those pieces were meant to stay glued together into one script
+      // argument. If the script isn't finished yet and stdin is
+      // available as a fallback, only treat a bare token as a file
+      // operand when it actually names something in the VFS -- otherwise
+      // fold it back into the script, since a real filename existing in
+      // the VFS is a much stronger signal than an arbitrary token shape.
+      const scriptAlreadyStarted = scripts.length > 0 || implicitScript.length > 0;
+      const stdinAvailable = !inPlace && options.stdin !== undefined && options.stdin !== null;
+      if (!scriptAlreadyStarted) implicitScript.push(arg);
+      else if (stdinAvailable && !vfsHas(vfs, arg)) implicitScript.push(arg);
+      else files.push(arg);
     }
   }
 
@@ -1373,31 +1451,33 @@ export default async function sed(commandStr, options = {}) {
   if (implicitScript.length > 0) scripts.push(implicitScript.join(" "));
   if (scripts.length === 0) scripts.push("");
 
-  const { commands, error, silentMode, extendedRegexMode } = parseMultipleScripts(scripts, extendedRegex, posix);
-  if (error) throw new Error(`sed: ${error}`);
+  const { commands, error, errorCode, silentMode, extendedRegexMode } = parseMultipleScripts(scripts, extendedRegex, posix);
+  if (error) throw sedError(`sed: ${error}`, errorCode || 1);
 
   const effectiveSilent = !!(silent || silentMode);
   const effectiveExtendedRegex = !!(extendedRegex || extendedRegexMode);
 
   if (inPlace) {
-    if (files.length === 0) throw new Error("sed: -i requires at least one file argument");
+    if (files.length === 0) throw sedError("sed: -i requires at least one file argument", 1);
+    let lastExitCode;
     for (const file of files) {
       if (file === "-") continue;
-      if (!(file in vfs)) throw new Error(`sed: ${file}: No such file or directory`);
-      const fileContent = vfs[file];
+      if (!vfsHas(vfs, file)) throw sedError(`sed: can't read ${file}: No such file or directory`, 2);
+      const fileContent = vfsGet(vfs, file);
       const result = await processContent(fileContent, commands, effectiveSilent, { filename: file, vfs, shell, extendedRegex: effectiveExtendedRegex, posix });
-      if (result.errorMessage) throw new Error(result.errorMessage);
-      vfs[file] = result.output;
+      if (result.errorMessage) throw sedError(result.errorMessage, result.errorCode || 1);
+      vfsSet(vfs, file, result.output);
+      if (result.exitCode !== undefined) lastExitCode = result.exitCode;
     }
-    return "";
+    return options.exitCode ? { output: "", exitCode: lastExitCode ?? 0 } : "";
   }
 
   let content = "";
   if (files.length === 0) {
     content = stdin;
     const result = await processContent(content, commands, effectiveSilent, { vfs, shell, extendedRegex: effectiveExtendedRegex, posix });
-    if (result.errorMessage) throw new Error(result.errorMessage);
-    return result.output;
+    if (result.errorMessage) throw sedError(result.errorMessage, result.errorCode || 1);
+    return options.exitCode ? { output: result.output, exitCode: result.exitCode ?? 0 } : result.output;
   }
 
   let stdinConsumed = false;
@@ -1405,14 +1485,14 @@ export default async function sed(commandStr, options = {}) {
     let fileContent;
     if (file === "-") { if (stdinConsumed) fileContent = ""; else { fileContent = stdin; stdinConsumed = true; } }
     else {
-      if (!(file in vfs)) throw new Error(`sed: ${file}: No such file or directory`);
-      fileContent = vfs[file];
+      if (!vfsHas(vfs, file)) throw sedError(`sed: can't read ${file}: No such file or directory`, 2);
+      fileContent = vfsGet(vfs, file);
     }
     if (content.length > 0 && fileContent.length > 0 && !content.endsWith("\n")) content += "\n";
     content += fileContent;
   }
 
   const result = await processContent(content, commands, effectiveSilent, { filename: files.length === 1 ? files[0] : undefined, vfs, shell, extendedRegex: effectiveExtendedRegex, posix });
-  if (result.errorMessage) throw new Error(result.errorMessage);
-  return result.output;
+  if (result.errorMessage) throw sedError(result.errorMessage, result.errorCode || 1);
+  return options.exitCode ? { output: result.output, exitCode: result.exitCode ?? 0 } : result.output;
 }
