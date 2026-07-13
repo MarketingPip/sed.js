@@ -1,7 +1,12 @@
 import { execFileSync } from 'node:child_process';
+import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import sed from './index.js';
 
-// ---------- PRNG (seeded, reproducible) ----------
+// ============================================================================
+// Shared PRNG & utilities
+// ============================================================================
 function mulberry32(seed) {
   return function () {
     seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
@@ -11,14 +16,19 @@ function mulberry32(seed) {
   };
 }
 
-let rand = mulberry32(12345);
+let rand = mulberry32(1);
 function setSeed(s) { rand = mulberry32(s); }
 function ri(a, b) { return a + Math.floor(rand() * (b - a + 1)); }
 function choice(arr) { return arr[ri(0, arr.length - 1)]; }
 function bool(p = 0.5) { return rand() < p; }
 
-// ---------- Random input text generation ----------
-const WORDS = ['foo', 'bar', 'baz', 'hello', 'world', 'a', 'ab', 'abc', 'test', '123', '456', 'X', 'Y', 'Z', '', 'the quick brown fox', 'AAA', 'aaa', 'line'];
+// ============================================================================
+// Shared word pool (merged from both scripts)
+// ============================================================================
+const WORDS = [
+  'foo', 'bar', 'baz', 'hello', 'world', 'a', 'ab', 'abc', 'test', '123', '456',
+  'X', 'Y', 'Z', '', 'the quick brown fox', 'AAA', 'aaa', 'line'
+];
 function randWord() { return choice(WORDS); }
 function randLine() {
   const n = ri(0, 4);
@@ -26,16 +36,62 @@ function randLine() {
   for (let i = 0; i < n; i++) parts.push(randWord());
   return parts.join(' ');
 }
+function randRecordSet(n) {
+  const r = [];
+  for (let i = 0; i < n; i++) r.push(randLine());
+  return r;
+}
+
+// ============================================================================
+// Shared regex pool (merged from both scripts)
+// ============================================================================
+const REGEX_POOL = [
+  { p: 'foo', pe: 'foo', g: 0 }, { p: 'bar', pe: 'bar', g: 0 },
+  { p: 'a', pe: 'a', g: 0 }, { p: 'b', pe: 'b', g: 0 },
+  { p: '[ab]', pe: '[ab]', g: 0 }, { p: '^a', pe: '^a', g: 0 },
+  { p: 'o$', pe: 'o$', g: 0 }, { p: 'a.c', pe: 'a.c', g: 0 },
+  { p: 'a*', pe: 'a*', g: 0 }, { p: 'a\\+', pe: 'a+', g: 0 },
+  { p: '[0-9]', pe: '[0-9]', g: 0 }, { p: '[a-z]+', pe: '[a-z]+', g: 0 },
+  { p: 'x\\?', pe: 'x?', g: 0 }, { p: '.', pe: '.', g: 0 },
+  { p: 'lin.', pe: 'lin.', g: 0 },
+  { p: '\\(foo\\)', pe: '(foo)', g: 1 },
+  { p: '\\(a\\)\\(b\\)', pe: '(a)(b)', g: 2 },
+  { p: '\\(.\\)\\(.\\)', pe: '(.)(.)', g: 2 },
+  { p: '\\([a-z]*\\)', pe: '([a-z]*)', g: 1 },
+  { p: '\\(foo\\)\\|(bar\\)', pe: '(foo)|(bar)', g: 2 },
+];
+function randRegexEntry() { return choice(REGEX_POOL); }
+function randRegexPattern(extended) { const e = randRegexEntry(); return extended ? e.pe : e.p; }
+
+// ============================================================================
+// Shared random input generation
+// ============================================================================
 function randInput() {
   const nLines = ri(0, 8);
   const lines = [];
   for (let i = 0; i < nLines; i++) lines.push(randLine());
   let text = lines.join('\n');
-  if (nLines > 0 && bool(0.85)) text += '\n'; // usually terminate with newline
+  if (nLines > 0 && bool(0.85)) text += '\n';
   return text;
 }
 
-// ---------- Random address generation ----------
+function randNullRecords() {
+  const n = ri(0, 5);
+  const recs = [];
+  for (let i = 0; i < n; i++) {
+    const parts = [];
+    const lineCount = ri(1, 2);
+    for (let j = 0; j < lineCount; j++) parts.push(randLine());
+    recs.push(parts.join('\n'));
+  }
+  let content = recs.join('\0');
+  if (n > 0 && bool(0.85)) content += '\0';
+  return content;
+}
+
+// ============================================================================
+// Shared address generation (from stdin fuzzer)
+// ============================================================================
 function randAddr(maxLine, extended, posix) {
   const kind = posix ? choice(['num', 'dollar', 'regex']) : choice(['num', 'dollar', 'regex', 'step']);
   if (kind === 'num') return String(ri(1, Math.max(1, maxLine)));
@@ -44,25 +100,13 @@ function randAddr(maxLine, extended, posix) {
   return `/${randRegexPattern(extended)}/`;
 }
 
-const REGEX_POOL = [
-  { p: 'foo', pe: 'foo', g: 0 }, { p: 'bar', pe: 'bar', g: 0 }, { p: 'a', pe: 'a', g: 0 }, { p: 'b', pe: 'b', g: 0 },
-  { p: '[ab]', pe: '[ab]', g: 0 }, { p: '^a', pe: '^a', g: 0 }, { p: 'o$', pe: 'o$', g: 0 }, { p: 'a.c', pe: 'a.c', g: 0 },
-  { p: 'a*', pe: 'a*', g: 0 }, { p: 'a\\+', pe: 'a+', g: 0 }, { p: '[0-9]', pe: '[0-9]', g: 0 }, { p: '[a-z]+', pe: '[a-z]+', g: 0 },
-  { p: 'x\\?', pe: 'x?', g: 0 }, { p: '.', pe: '.', g: 0 }, { p: 'lin.', pe: 'lin.', g: 0 },
-  { p: '\\(foo\\)', pe: '(foo)', g: 1 }, { p: '\\(a\\)\\(b\\)', pe: '(a)(b)', g: 2 }, { p: '\\(.\\)\\(.\\)', pe: '(.)(.)', g: 2 },
-  { p: '\\([a-z]*\\)', pe: '([a-z]*)', g: 1 }, { p: '\\(foo\\)\\|\\(bar\\)', pe: '(foo)|(bar)', g: 2 },
-];
-function randRegexEntry() { return choice(REGEX_POOL); }
-function randRegexPattern(extended) { const e = randRegexEntry(); return extended ? e.pe : e.p; }
-
 function randAddress(maxLine, extended, posix) {
-  // returns address prefix string like "3,5" or "/foo/" or "" (none)
   if (bool(0.4)) return '';
   const a1 = randAddr(maxLine, extended, posix);
   let addr = a1;
   if (bool(0.35)) {
     if (!posix && bool(0.3)) {
-      addr += `,+${ri(0, 3)}`; // relative end (GNU extension)
+      addr += `,+${ri(0, 3)}`;
     } else {
       addr += `,${randAddr(maxLine, extended, posix)}`;
     }
@@ -71,12 +115,12 @@ function randAddress(maxLine, extended, posix) {
   return addr + ' ';
 }
 
-// ---------- Random command generation ----------
+// ============================================================================
+// Shared command generation (from stdin fuzzer)
+// ============================================================================
 const labelPool = ['A', 'B', 'loop'];
 
-function randDelimiter() {
-  return choice(['/', '#', '@']);
-}
+function randDelimiter() { return choice(['/', '#', '@']); }
 
 function escapeForDelim(s, delim) {
   return s.split(delim).join('\\' + delim);
@@ -126,11 +170,8 @@ function randTextCmd() {
   return `${cmd}\\\n${text}`;
 }
 
-function randBranchCmd() {
-  return choice(['b', 't', 'T']);
-}
+function randBranchCmd() { return choice(['b', 't', 'T']); }
 
-// Generates a flat list of command strings (no nested groups, to keep branch targets simple)
 function genScriptCommands(maxLine, extended, posix, depth = 0) {
   const n = ri(1, depth === 0 ? 6 : 3);
   const cmds = [];
@@ -153,10 +194,6 @@ function genScriptCommands(maxLine, extended, posix, depth = 0) {
   return cmds.join('\n');
 }
 
-// Occasionally inserts a top-level `:label` plus one or more `b`/`t`/`T`
-// commands targeting it, to exercise branch/label handling. Branches are
-// address-guarded so they don't trivially create unbounded loops on every
-// line (the runaway-script safety nets handle it if they do anyway).
 function maybeAddLabelAndBranches(cmds, maxLine, extended, posix) {
   if (!bool(0.06) || cmds.length < 2) return cmds;
   const labelPos = ri(0, cmds.length - 1);
@@ -165,9 +202,6 @@ function maybeAddLabelAndBranches(cmds, maxLine, extended, posix) {
   withLabel.splice(labelPos, 0, `:${label}`);
   const nBranches = 1;
   for (let i = 0; i < nBranches; i++) {
-    // Always address-guard branches (never unconditional) to keep the
-    // overwhelming majority of generated scripts terminating quickly --
-    // an unconditional `b` back to an earlier label loops forever every time.
     const addr = `/${randRegexPattern(extended)}/ `;
     const branchCmd = `${addr}${posix ? choice(['b', 't']) : randBranchCmd()} ${label}`;
     const pos = ri(0, withLabel.length);
@@ -204,7 +238,29 @@ function genTestCase() {
   return { args: [...flags, script], input };
 }
 
-// ---------- Runners ----------
+// ============================================================================
+// Shared simple script generator (from -s/-z/M-flag fuzzer)
+// ============================================================================
+const SIMPLE_REGEX_POOL = ['a', 'foo', '[ab]', '^a', 'o$', '.', 'a*', '\\(a\\)\\(b\\)'];
+
+function randSimpleScript() {
+  const kind = choice(['s', 's', 'p', '=', 'yjoin', 'hgx']);
+  if (kind === 's') {
+    const pat = choice(SIMPLE_REGEX_POOL);
+    const repl = choice(['X', 'Y&Z', '']);
+    const flags = (bool(0.4) ? 'g' : '') + (bool(0.2) ? 'i' : '');
+    return `s/${pat}/${repl}/${flags}`;
+  }
+  if (kind === 'p') return 'p';
+  if (kind === '=') return '=';
+  if (kind === 'yjoin') return ':a;N;$!ba;s/\n/,/g';
+  if (kind === 'hgx') return '1h;2{x;G}';
+  return 'p';
+}
+
+// ============================================================================
+// Shared runners
+// ============================================================================
 function runRealSed(args, input) {
   try {
     const out = execFileSync('sed', args, { input, encoding: 'utf8', timeout: 800 });
@@ -214,80 +270,62 @@ function runRealSed(args, input) {
   }
 }
 
-async function runJsSed(args, input) {
+async function runJsSed(args, input, vfs) {
   try {
     const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('JS_TIMEOUT')), 800));
-    const out = await Promise.race([sed(args, { stdin: input }), timeout]);
+    const opts = vfs ? { vfs } : { stdin: input };
+    const out = await Promise.race([sed(args, opts), timeout]);
     return { ok: true, output: out };
   } catch (e) {
     return { ok: false, error: e.message };
   }
 }
 
-function normalizeOutput(realResult) {
-  // GNU sed with execFileSync: stdout captured without trailing manipulation.
-  // Our JS sed's `output` never includes a final trailing newline marker logic matches "no trailing \n if input had none".
-  // Real sed via execFileSync captures raw stdout exactly, so we must compare exactly,
-  // but our js return value never adds trailing content beyond what sed would print.
-  return realResult;
-}
+function isHangLike(err) { return /ETIMEDOUT|ENOBUFS/.test(err || ''); }
+function isJsRunawayLike(err) { return /JS_TIMEOUT|output size limit exceeded/.test(err || ''); }
 
-async function runOne(tc) {
-  const real = runRealSed(tc.args, tc.input);
-  const js = await runJsSed(tc.args, tc.input);
-
-  const isHangLike = err => /ETIMEDOUT|ENOBUFS/.test(err || '');
-  const isJsRunawayLike = err => /JS_TIMEOUT|output size limit exceeded/.test(err || '');
-
-  if ((!real.ok && isHangLike(real.error)) || (!js.ok && isJsRunawayLike(js.error))) {
-    // Either side hit a pathological infinite-loop/unbounded-growth script.
-    // There's no finite ground truth to compare against here, so this isn't
-    // a genuine implementation mismatch -- skip it.
-    return { mismatch: false, bothFailed: true };
-  }
-
-  if (real.ok && js.ok) {
-    // real sed's stdout always literally what would be printed; compare directly.
-    if (real.output !== js.output) {
-      return { mismatch: true, kind: 'output', real, js, tc };
-    }
-    return { mismatch: false };
-  } else if (real.ok && !js.ok) {
-    return { mismatch: true, kind: 'js-threw-real-ok', real, js, tc };
-  } else if (!real.ok && js.ok) {
-    return { mismatch: true, kind: 'real-failed-js-ok', real, js, tc };
-  } else {
-    // both failed -- not counted as mismatch (error message parity not required)
-    return { mismatch: false, bothFailed: true };
-  }
-}
-
-// ---------- Main fuzz loop ----------
-async function fuzz(count, seedStart = 1) {
+// ============================================================================
+// MODE 1: Stdin fuzzer (comprehensive script generation)
+// ============================================================================
+async function fuzzStdin(count, seedStart) {
   const failures = [];
   let bothFailedCount = 0;
   let passCount = 0;
+
   for (let i = 0; i < count; i++) {
     setSeed(seedStart + i);
     const tc = genTestCase();
     let res;
     try {
-      res = await runOne(tc);
+      const real = runRealSed(tc.args, tc.input);
+      const js = await runJsSed(tc.args, tc.input);
+
+      if ((!real.ok && isHangLike(real.error)) || (!js.ok && isJsRunawayLike(js.error))) {
+        res = { mismatch: false, bothFailed: true };
+      } else if (real.ok && js.ok) {
+        if (real.output !== js.output) {
+          res = { mismatch: true, kind: 'output', real, js, tc };
+        } else {
+          res = { mismatch: false };
+        }
+      } else if (real.ok && !js.ok) {
+        res = { mismatch: true, kind: 'js-threw-real-ok', real, js, tc };
+      } else if (!real.ok && js.ok) {
+        res = { mismatch: true, kind: 'real-failed-js-ok', real, js, tc };
+      } else {
+        res = { mismatch: false, bothFailed: true };
+      }
     } catch (e) {
       res = { mismatch: true, kind: 'harness-exception', error: e.message, tc };
     }
+
     if (res.bothFailed) { bothFailedCount++; continue; }
     if (res.mismatch) failures.push({ seed: seedStart + i, ...res });
     else passCount++;
   }
-  return { failures, bothFailedCount, passCount, total: count };
-}
 
-const countArg = parseInt(process.argv[2] || '500', 10);
-const seedArg = parseInt(process.argv[3] || '1', 10);
-
-fuzz(countArg, seedArg).then(({ failures, bothFailedCount, passCount, total }) => {
-  console.log(`Total: ${total}  Pass: ${passCount}  BothFailed(skipped): ${bothFailedCount}  Mismatches: ${failures.length}`);
+  console.log(`\n========== STDIN MODE ==========`);
+  console.log(`Total: ${count}  Pass: ${passCount}  BothFailed(skipped): ${bothFailedCount}  Mismatches: ${failures.length}`);
   const maxShow = 40;
   for (const f of failures.slice(0, maxShow)) {
     console.log('----------------------------------------');
@@ -298,5 +336,192 @@ fuzz(countArg, seedArg).then(({ failures, bothFailedCount, passCount, total }) =
     console.log('js  :', JSON.stringify(f.js));
   }
   if (failures.length > maxShow) console.log(`... and ${failures.length - maxShow} more`);
-  process.exitCode = failures.length > 0 ? 1 : 0;
-});
+  return failures.length;
+}
+
+// ============================================================================
+// MODE 2: -s (separate files) fuzzer
+// ============================================================================
+async function fuzzSeparate(count, seedStart) {
+  let mismatches = 0, tested = 0;
+  const tmp = mkdtempSync(join(tmpdir(), 'sedfuzz-s-'));
+  try {
+    for (let i = 0; i < count; i++) {
+      setSeed(seedStart + i);
+      const nFiles = ri(1, 3);
+      const vfs = {};
+      const filenames = [];
+      for (let f = 0; f < nFiles; f++) {
+        const name = `f${f}.txt`;
+        const nLines = ri(0, 4);
+        const content = randRecordSet(nLines).join('\n') + (nLines > 0 && bool(0.85) ? '\n' : '');
+        vfs[name] = content;
+        writeFileSync(join(tmp, name), content);
+        filenames.push(name);
+      }
+      const script = randSimpleScript();
+      const silent = bool(0.3);
+      const args = [...(silent ? ['-n'] : []), '-s', script, ...filenames];
+      const realArgs = [...(silent ? ['-n'] : []), '-s', script, ...filenames.map(f => join(tmp, f))];
+
+      let real, js;
+      try { real = { ok: true, out: execFileSync('sed', realArgs, { encoding: 'utf8', timeout: 800 }) }; }
+      catch (e) { real = { ok: false, err: (e.stderr || e.message || '').toString() }; }
+      try { js = { ok: true, out: await sed(args, { vfs }) }; }
+      catch (e) { js = { ok: false, err: e.message }; }
+
+      if (real.ok && js.ok) {
+        tested++;
+        if (real.out !== js.out) {
+          mismatches++;
+          if (mismatches <= 10) {
+            console.log('---- -s MISMATCH ----');
+            console.log('seed', seedStart + i, 'args', JSON.stringify(args), 'vfs', JSON.stringify(vfs));
+            console.log('real:', JSON.stringify(real.out));
+            console.log('js  :', JSON.stringify(js.out));
+          }
+        }
+      } else if (real.ok !== js.ok) {
+        if (!isHangLike(real.err)) {
+          mismatches++;
+          if (mismatches <= 10) {
+            console.log('---- -s ERROR MISMATCH ----');
+            console.log('seed', seedStart + i, 'args', JSON.stringify(args), 'vfs', JSON.stringify(vfs));
+            console.log('real:', JSON.stringify(real));
+            console.log('js  :', JSON.stringify(js));
+          }
+        }
+      }
+    }
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log(`\n========== -s MODE ==========`);
+  console.log(`-s: tested=${tested} mismatches=${mismatches} total=${count}`);
+  return mismatches;
+}
+
+// ============================================================================
+// MODE 3: -z (null-delimited records) fuzzer
+// ============================================================================
+async function fuzzNullData(count, seedStart) {
+  let mismatches = 0, tested = 0;
+  for (let i = 0; i < count; i++) {
+    setSeed(seedStart + i);
+    const input = randNullRecords();
+    const script = randSimpleScript();
+    const silent = bool(0.3);
+    const args = [...(silent ? ['-n'] : []), '-z', script];
+
+    let real, js;
+    try { real = { ok: true, out: execFileSync('sed', args, { input, encoding: 'utf8', timeout: 800 }) }; }
+    catch (e) { real = { ok: false, err: (e.stderr || e.message || '').toString() }; }
+    try { js = { ok: true, out: await sed(args, { stdin: input }) }; }
+    catch (e) { js = { ok: false, err: e.message }; }
+
+    if (real.ok && js.ok) {
+      tested++;
+      if (real.out !== js.out) {
+        mismatches++;
+        if (mismatches <= 10) {
+          console.log('---- -z MISMATCH ----');
+          console.log('seed', seedStart + i, 'args', JSON.stringify(args), 'input', JSON.stringify(input));
+          console.log('real:', JSON.stringify(real.out));
+          console.log('js  :', JSON.stringify(js.out));
+        }
+      }
+    } else if (real.ok !== js.ok) {
+      if (!isHangLike(real.err)) {
+        mismatches++;
+        if (mismatches <= 10) {
+          console.log('---- -z ERROR MISMATCH ----');
+          console.log('seed', seedStart + i, 'args', JSON.stringify(args), 'input', JSON.stringify(input));
+          console.log('real:', JSON.stringify(real));
+          console.log('js  :', JSON.stringify(js));
+        }
+      }
+    }
+  }
+  console.log(`\n========== -z MODE ==========`);
+  console.log(`-z: tested=${tested} mismatches=${mismatches} total=${count}`);
+  return mismatches;
+}
+
+// ============================================================================
+// MODE 4: M/m flag fuzzer
+// ============================================================================
+function randMultilineInput() {
+  const n = ri(2, 4);
+  return randRecordSet(n).join('\n') + (bool(0.85) ? '\n' : '');
+}
+
+async function fuzzMultilineFlag(count, seedStart) {
+  let mismatches = 0, tested = 0;
+  for (let i = 0; i < count; i++) {
+    setSeed(seedStart + i);
+    const input = randMultilineInput();
+    const nJoins = ri(1, 3);
+    const joinPrefix = Array(nJoins).fill('N').join(';') + ';';
+    const kind = choice(['s', 'addr']);
+    const pat = choice(['^a', 'o$', '^foo$', '^$', 'a.c']);
+    let script;
+    if (kind === 's') {
+      const repl = choice(['X', 'Y&Z']);
+      script = `${joinPrefix}s/${pat}/${repl}/${bool(0.5) ? 'gM' : 'M'}`;
+    } else {
+      script = `${joinPrefix}/${pat}/${bool(0.5) ? 'M' : 'IM'}p`;
+    }
+    const silent = kind === 'addr';
+    const args = [...(silent ? ['-n'] : []), script];
+
+    let real, js;
+    try { real = { ok: true, out: execFileSync('sed', args, { input, encoding: 'utf8', timeout: 800 }) }; }
+    catch (e) { real = { ok: false, err: (e.stderr || e.message || '').toString() }; }
+    try { js = { ok: true, out: await sed(args, { stdin: input }) }; }
+    catch (e) { js = { ok: false, err: e.message }; }
+
+    if (real.ok && js.ok) {
+      tested++;
+      if (real.out !== js.out) {
+        mismatches++;
+        if (mismatches <= 10) {
+          console.log('---- M-flag MISMATCH ----');
+          console.log('seed', seedStart + i, 'args', JSON.stringify(args), 'input', JSON.stringify(input));
+          console.log('real:', JSON.stringify(real.out));
+          console.log('js  :', JSON.stringify(js.out));
+        }
+      }
+    } else if (real.ok !== js.ok) {
+      if (!isHangLike(real.err)) {
+        mismatches++;
+        if (mismatches <= 10) {
+          console.log('---- M-flag ERROR MISMATCH ----');
+          console.log('seed', seedStart + i, 'args', JSON.stringify(args), 'input', JSON.stringify(input));
+          console.log('real:', JSON.stringify(real));
+          console.log('js  :', JSON.stringify(js));
+        }
+      }
+    }
+  }
+  console.log(`\n========== M-flag MODE ==========`);
+  console.log(`M-flag: tested=${tested} mismatches=${mismatches} total=${count}`);
+  return mismatches;
+}
+
+// ============================================================================
+// Main entry point
+// ============================================================================
+const countArg = parseInt(process.argv[2] || '500', 10);
+const seedArg = parseInt(process.argv[3] || '1', 10);
+
+const results = await Promise.all([
+  fuzzStdin(countArg, seedArg),
+  fuzzSeparate(countArg, seedArg + 100000),
+  fuzzNullData(countArg, seedArg + 200000),
+  fuzzMultilineFlag(countArg, seedArg + 300000),
+]);
+
+const totalMismatches = results.reduce((a, b) => a + b, 0);
+console.log(`\n========== OVERALL ==========`);
+console.log(`Total mismatches across all modes: ${totalMismatches}`);
+process.exitCode = totalMismatches > 0 ? 1 : 0;
