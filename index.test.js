@@ -1099,9 +1099,9 @@ describe('Error Handling', () => {
 
   describe('Option Errors', () => {
     it('unknown short option', async () => {
-      const system = await runSystemSed(['-z', 's/a/b/'], 'a');
+      const system = await runSystemSed(['-k', 's/a/b/'], 'a');
 
-      const port = await runSed('-z s/a/b/', 'a');
+      const port = await runSed('-k s/a/b/', 'a');
 
       expect(system.success).toBeDefined();
       expect(port.success).toBe(false);
