@@ -244,7 +244,9 @@ class SedLexer {
       else { pattern += this.advance(); }
     }
     if (this.peek() === "/") this.advance();
-    return { type: SedTokenType.PATTERN, value: pattern, pattern, line: startLine, column: startColumn };
+    let flags = "";
+    while (!this.posix && (this.peek() === "I" || this.peek() === "M" || this.peek() === "m")) flags += this.advance();
+    return { type: SedTokenType.PATTERN, value: pattern, pattern, ignoreCase: flags.includes("I"), multiline: /[Mm]/.test(flags), line: startLine, column: startColumn };
   }
   readLabelDef() {
     const startLine = this.line; const startColumn = this.column; this.advance();
@@ -289,13 +291,13 @@ class SedLexer {
     }
     const next = this.peek();
     if (next !== "" && next !== "\n" && next !== ";" && next !== "}" && next !== "#") {
-      return { type: SedTokenType.ERROR, value: "extra characters after command", line: startLine, column: startColumn };
+      return { type: SedTokenType.ERROR, value: "extra characters after command", isMessage: true, line: startLine, column: startColumn };
     }
     return { type: SedTokenType.COMMAND, value: ch, numArg, line: startLine, column: startColumn };
   }
   readSubstitute(startLine, startColumn) {
     const delimiter = this.advance();
-    if (!delimiter || delimiter === "\n") return { type: SedTokenType.ERROR, value: "s", line: startLine, column: startColumn };
+    if (!delimiter || delimiter === "\n") return { type: SedTokenType.ERROR, value: "unterminated `s' command", isMessage: true, line: startLine, column: startColumn };
     
     let pattern = ""; let inBracket = false;
     while (this.pos < this.input.length) {
@@ -316,7 +318,7 @@ class SedLexer {
       else { pattern += this.advance(); }
     }
     
-    if (this.peek() !== delimiter) return { type: SedTokenType.ERROR, value: "unterminated substitution pattern", line: startLine, column: startColumn };
+    if (this.peek() !== delimiter) return { type: SedTokenType.ERROR, value: "unterminated `s' command", isMessage: true, line: startLine, column: startColumn };
     this.advance();
     
     let replacement = "";
@@ -331,10 +333,11 @@ class SedLexer {
       } else if (this.peek() === "\n") { break; } else { replacement += this.advance(); }
     }
     
-    if (this.peek() === delimiter) this.advance();
+    if (this.peek() !== delimiter) return { type: SedTokenType.ERROR, value: "unterminated `s' command", isMessage: true, line: startLine, column: startColumn };
+    this.advance();
     
     let flags = "";
-    const allowedFlags = this.posix ? ["g", "p"] : ["g", "i", "p", "I", "e"];
+    const allowedFlags = this.posix ? ["g", "p"] : ["g", "i", "p", "I", "e", "M", "m"];
     while (this.pos < this.input.length) { 
       const ch = this.peek(); 
       if (allowedFlags.includes(ch) || this.isDigit(ch)) flags += this.advance(); 
@@ -362,7 +365,7 @@ class SedLexer {
       while (this.peek() === " " || this.peek() === "\t") this.advance();
       const next = this.peek();
       if (next !== "" && next !== "\n" && next !== ";" && next !== "}" && next !== "#") {
-        return { type: SedTokenType.ERROR, value: "unknown option to `s'", line: startLine, column: startColumn };
+        return { type: SedTokenType.ERROR, value: "unknown option to `s'", isMessage: true, line: startLine, column: startColumn };
       }
     }
     
@@ -378,6 +381,7 @@ class SedLexer {
       flags,
       global: flags.includes("g"), // Fix: Removed "I" flag from forcing a global replacement
       ignoreCase: flags.includes("i") || flags.includes("I"),
+      multiline: /[Mm]/.test(flags),
       printOnMatch: flags.includes("p"), 
       executeShell: flags.includes("e"), 
       nthOccurrence,
@@ -388,22 +392,21 @@ class SedLexer {
   }
   readTransliterate(startLine, startColumn) {
     const delimiter = this.advance();
-    if (!delimiter || delimiter === "\n") return { type: SedTokenType.ERROR, value: "y", line: startLine, column: startColumn };
+    if (!delimiter || delimiter === "\n") return { type: SedTokenType.ERROR, value: "unterminated `y' command", isMessage: true, line: startLine, column: startColumn };
     const source = this.readEscapedString(delimiter);
-    if (source === null || this.peek() !== delimiter) return { type: SedTokenType.ERROR, value: "unterminated transliteration source", line: startLine, column: startColumn };
+    if (source === null || this.peek() !== delimiter) return { type: SedTokenType.ERROR, value: "unterminated `y' command", isMessage: true, line: startLine, column: startColumn };
     this.advance();
     const dest = this.readEscapedString(delimiter);
-    if (dest === null || this.peek() !== delimiter) return { type: SedTokenType.ERROR, value: "unterminated transliteration dest", line: startLine, column: startColumn };
+    if (dest === null || this.peek() !== delimiter) return { type: SedTokenType.ERROR, value: "unterminated `y' command", isMessage: true, line: startLine, column: startColumn };
     this.advance();
     let nextChar = this.peek();
     while (nextChar === " " || nextChar === "\t") { this.advance(); nextChar = this.peek(); }
-    if (nextChar !== "" && nextChar !== ";" && nextChar !== "\n" && nextChar !== "}") return { type: SedTokenType.ERROR, value: "extra text at the end of a transform command", line: startLine, column: startColumn };
+    if (nextChar !== "" && nextChar !== ";" && nextChar !== "\n" && nextChar !== "}") return { type: SedTokenType.ERROR, value: "extra characters after command", isMessage: true, line: startLine, column: startColumn };
     return { type: SedTokenType.TRANSLITERATE, value: `y${delimiter}${source}${delimiter}${dest}${delimiter}`, source, dest, line: startLine, column: startColumn };
   }
   readTextCommand(cmd, startLine, startColumn) {
     let hasBackslash = false;
     if (this.peek() === "\\" && this.pos + 1 < this.input.length &&["\n", " ", "\t"].includes(this.input[this.pos + 1])) { hasBackslash = true; this.advance(); }
-    if (this.posix && !hasBackslash) return { type: SedTokenType.ERROR, value: `expected \\ after \`${cmd}'`, line: startLine, column: startColumn };
     if (this.peek() === " " || this.peek() === "\t") this.advance();
     if (this.peek() === "\\" && this.pos + 1 < this.input.length && [" ", "\t"].includes(this.input[this.pos + 1])) this.advance();
     if (hasBackslash && this.peek() === "\n") this.advance();
@@ -430,7 +433,7 @@ class SedLexer {
       }
       text += this.advance();
     }
-    return { type: SedTokenType.TEXT_CMD, value: cmd, text, line: startLine, column: startColumn };
+    return { type: SedTokenType.TEXT_CMD, value: cmd, text, hasBackslash, line: startLine, column: startColumn };
   }
   readBranch(type, cmd, startLine, startColumn) {
     while (this.peek() === " " || this.peek() === "\t") this.advance();
@@ -495,7 +498,7 @@ class SedParser {
       case SedTokenType.TRANSLITERATE: {
         this.advance();
         if (token.source.length !== token.dest.length) {
-          return { command: null, error: `strings are not the same length in 'y' command` };
+          return { command: null, error: "strings for `y' command are different lengths" };
         }
         return { command: { type: "transliterate", address, source: token.source, dest: token.dest } };
       };
@@ -508,6 +511,9 @@ class SedParser {
         const textType = token.value === "a" ? "append" : token.value === "i" ? "insert" : "change";
         if (this.posix && textType !== "change" && address && address.end !== undefined) {
           return { command: null, error: "command only uses one address" };
+        }
+        if (this.posix && !token.hasBackslash) {
+          return { command: null, error: "expected \\ after `a', `c' or `i'" };
         }
         return { command: { type: textType, address, text: token.text } };
       }
@@ -523,7 +529,7 @@ class SedParser {
       case SedTokenType.VERSION: this.advance(); return { command: { type: "version", address, minVersion: token.label } };
       case SedTokenType.LBRACE: return this.parseGroup(address);
       case SedTokenType.RBRACE: return { command: null };
-      case SedTokenType.ERROR: return { command: null, error: `invalid command: ${token.value}` };
+      case SedTokenType.ERROR: return { command: null, error: token.isMessage ? token.value : `unknown command: \`${token.value}'` };
       default: if (address && (address.start !== undefined || address.end !== undefined)) return { command: null, error: "command expected" }; return { command: null };
     }
   }
@@ -555,7 +561,7 @@ class SedParser {
       if (result.command) commands.push(result.command);
       if (this.pos === posBefore && !this.isAtEnd()) return { command: null, error: `unknown command: '${this.peek()?.value}'` };
     }
-    if (!this.check(SedTokenType.RBRACE)) return { command: null, error: "unmatched brace in grouped commands" };
+    if (!this.check(SedTokenType.RBRACE)) return { command: null, error: "unmatched `{'" };
     this.advance(); return { command: { type: "group", address, commands } };
   }
   parseAddressRange() {
@@ -574,7 +580,7 @@ class SedParser {
     switch (token.type) {
       case SedTokenType.NUMBER: this.advance(); return token.value;
       case SedTokenType.DOLLAR: this.advance(); return "$";
-      case SedTokenType.PATTERN: this.advance(); return { pattern: token.pattern || token.value };
+      case SedTokenType.PATTERN: this.advance(); return { pattern: token.pattern || token.value, ignoreCase: token.ignoreCase, multiline: token.multiline };
       case SedTokenType.STEP: this.advance(); return { first: token.first || 0, step: token.step || 0 };
       case SedTokenType.RELATIVE_OFFSET: this.advance(); return { offset: token.offset || 0 };
       default: return undefined;
@@ -662,14 +668,26 @@ function createInitialState(totalLines, filename, rangeStates, extendedRegex, po
 // written (matching a file with no trailing newline).
 const MAX_OUTPUT_SIZE = 50 * 1024 * 1024; // 50MB safety cap
 
-function makeOutputBuilder() {
+function makeOutputBuilder(recordSeparator = "\n") {
   let buf = "";
   let pending = false;
+  let pendingSep = recordSeparator;
   return {
-    write(text, chomped) {
-      if (pending) { buf += "\n"; pending = false; }
+    write(text, chomped, sep = recordSeparator) {
+      if (pending) { buf += pendingSep; pending = false; }
       buf += text;
-      if (chomped) buf += "\n"; else pending = true;
+      if (chomped) buf += sep; else { pending = true; pendingSep = sep; }
+      if (buf.length > MAX_OUTPUT_SIZE) {
+        throw sedError("sed: output size limit exceeded (possible infinite loop in script)", 1);
+      }
+    },
+    // Splices raw bytes into the stream verbatim -- no separator added or
+    // stripped, matching real sed's `r` command exactly (it dumps a file's
+    // contents byte-for-byte, including a missing or repeated trailing
+    // newline). Still flushes a previously-deferred separator first.
+    writeRaw(text) {
+      if (pending) { buf += pendingSep; pending = false; }
+      buf += text;
       if (buf.length > MAX_OUTPUT_SIZE) {
         throw sedError("sed: output size limit exceeded (possible infinite loop in script)", 1);
       }
@@ -695,7 +713,8 @@ function matchesAddress(address, lineNum, totalLines, line, state) {
       if (rawPattern === "" && state?.lastPattern) rawPattern = state.lastPattern;
       else if (rawPattern !== "" && state) state.lastPattern = rawPattern;
       const pattern = normalizeForJs(state?.extendedRegex ? rawPattern : breToEre(rawPattern, !!state?.posix));
-      return new RegExp(pattern, "s").test(line);
+      const jsFlags = "s" + (address.ignoreCase ? "i" : "") + (address.multiline ? "m" : "");
+      return new RegExp(pattern, jsFlags).test(line);
     } catch { return false; }
   }
   return false;
@@ -935,8 +954,8 @@ async function executeCommand(cmd, state, ctx, shell) {
       const pattern = normalizeForJs(cmd.extendedRegex ? rawPattern : breToEre(rawPattern, !!cmd.posix));
 
       try {
-        const execRegex = new RegExp(pattern, "gs" + (cmd.ignoreCase ? "i" : ""));
-        const testRegex = new RegExp(pattern, "s" + (cmd.ignoreCase ? "i" : ""));
+        const execRegex = new RegExp(pattern, "gs" + (cmd.ignoreCase ? "i" : "") + (cmd.multiline ? "m" : ""));
+        const testRegex = new RegExp(pattern, "s" + (cmd.ignoreCase ? "i" : "") + (cmd.multiline ? "m" : ""));
         if (testRegex.test(state.patternSpace)) {
           const { result, matchedAny } = await doAsyncReplace(state.patternSpace, execRegex, cmd, shell);
           if (matchedAny) {
@@ -951,42 +970,42 @@ async function executeCommand(cmd, state, ctx, shell) {
     }
     case "print": ctx.builder.write(state.patternSpace, state.chomped); break;
     case "printFirstLine": {
-      const newlineIdx = state.patternSpace.indexOf("\n");
-      if (newlineIdx !== -1) ctx.builder.write(state.patternSpace.slice(0, newlineIdx), true);
+      const boundaryIdx = state.patternSpace.indexOf(ctx.RS);
+      if (boundaryIdx !== -1) ctx.builder.write(state.patternSpace.slice(0, boundaryIdx), true);
       else ctx.builder.write(state.patternSpace, state.chomped);
       break;
     }
     case "delete": state.deleted = true; break;
     case "deleteFirstLine": {
-      const newlineIdx = state.patternSpace.indexOf("\n");
-      if (newlineIdx !== -1) { state.patternSpace = state.patternSpace.slice(newlineIdx + 1); state.restartCycle = true; state.inDRestartedCycle = true; }
+      const boundaryIdx = state.patternSpace.indexOf(ctx.RS);
+      if (boundaryIdx !== -1) { state.patternSpace = state.patternSpace.slice(boundaryIdx + 1); state.restartCycle = true; state.inDRestartedCycle = true; }
       else { state.deleted = true; } break;
     }
     case "zap": state.patternSpace = ""; break;
-    case "append": state.deferredOutput.push({ type: "text", text: cmd.text, chomped: true }); break;
+    case "append": state.deferredOutput.push({ type: "text", text: cmd.text, chomped: true, sep: "\n" }); break;
     case "insert": ctx.builder.write(cmd.text, true); break;
     case "change": if (addrResult.closing) ctx.builder.write(cmd.text, true); state.deleted = true; break;
     case "hold": state.holdSpace = state.patternSpace; state.holdChomped = state.chomped; break;
     case "holdAppend":
-    state.holdSpace = `${state.holdSpace}\n${state.patternSpace}`;
+    state.holdSpace = `${state.holdSpace}${ctx.RS}${state.patternSpace}`;
     state.holdChomped = state.chomped;
     break;
     case "get": state.patternSpace = state.holdSpace; state.chomped = state.holdChomped; break;
-    case "getAppend": state.patternSpace += `\n${state.holdSpace}`; state.chomped = state.holdChomped; break;
+    case "getAppend": state.patternSpace += `${ctx.RS}${state.holdSpace}`; state.chomped = state.holdChomped; break;
     case "exchange": {
       const temp = state.patternSpace; state.patternSpace = state.holdSpace; state.holdSpace = temp;
       const tempC = state.chomped; state.chomped = state.holdChomped; state.holdChomped = tempC;
       break;
     }
     case "next": state.printed = true; break;
-    case "quit": state.quit = true; if (cmd.exitCode !== undefined) state.exitCode = cmd.exitCode; break;
-    case "quitSilent": state.quit = true; state.quitSilent = true; if (cmd.exitCode !== undefined) state.exitCode = cmd.exitCode; break;
+    case "quit": state.quit = true; state.explicitQuit = true; if (cmd.exitCode !== undefined) state.exitCode = cmd.exitCode; break;
+    case "quitSilent": state.quit = true; state.explicitQuit = true; state.quitSilent = true; if (cmd.exitCode !== undefined) state.exitCode = cmd.exitCode; break;
     case "list": ctx.builder.write(escapeForList(state.patternSpace, cmd.listWidth !== undefined ? cmd.listWidth : (ctx.defaultListWidth !== undefined ? ctx.defaultListWidth : 70)), true); break;
     case "printFilename": if (state.currentFilename) ctx.builder.write(state.currentFilename, true); break;
     case "readFile": state.deferredOutput.push({ type: "r", filename: cmd.filename, wholeFile: true }); break;
-    case "readFileLine": state.deferredOutput.push({ type: "r", filename: cmd.filename, wholeFile: false }); break;
-    case "writeFile": state.pendingFileWrites.push({ filename: cmd.filename, content: `${state.patternSpace}\n` }); break;
-    case "writeFirstLine": { const newlineIdx = state.patternSpace.indexOf("\n"); state.pendingFileWrites.push({ filename: cmd.filename, content: `${newlineIdx !== -1 ? state.patternSpace.slice(0, newlineIdx) : state.patternSpace}\n` }); break; }
+    case "readFileLine": state.deferredOutput.push({ type: "r", filename: cmd.filename, wholeFile: false, sep: "\n" }); break;
+    case "writeFile": state.pendingFileWrites.push({ filename: cmd.filename, content: `${state.patternSpace}${ctx.RS}` }); break;
+    case "writeFirstLine": { const boundaryIdx = state.patternSpace.indexOf(ctx.RS); state.pendingFileWrites.push({ filename: cmd.filename, content: `${boundaryIdx !== -1 ? state.patternSpace.slice(0, boundaryIdx) : state.patternSpace}${ctx.RS}` }); break; }
     case "execute": {
       if (cmd.command) {
         if (shell) { let out = await shell(cmd.command); if (out.endsWith("\n")) out = out.slice(0, -1); ctx.builder.write(out, true); }
@@ -1075,7 +1094,7 @@ async function executeCommands(commands, labelIndex, state, ctx, shell) {
           if (ctx.flushDeferred) ctx.flushDeferred(state);
           state.linesConsumedInCycle++;
           const newIdx = ctx.currentLineIndex + state.linesConsumedInCycle;
-          state.patternSpace += `\n${ctx.lines[newIdx]}`;
+          state.patternSpace += `${ctx.RS}${ctx.lines[newIdx]}`;
           state.chomped = ctx.chompedFor(newIdx);
           state.lineNumber = newIdx + 1; state.substitutionMade = false;
         } else { state.quit = true; if (state.posix) state.deleted = true; break; }
@@ -1118,22 +1137,24 @@ async function executeCommands(commands, labelIndex, state, ctx, shell) {
 // ==========================================
 
 async function processContent(content, commands, silent, options = {}) {
-  const { filename, vfs, shell, extendedRegex, posix } = options;
-  const lines = content.split("\n");
-  const endsWithNewline = content.endsWith("\n");
+  const { filename, vfs, shell, extendedRegex, posix, nullData } = options;
+  const RS = nullData ? "\0" : "\n";
+  const lines = content.split(RS);
+  const endsWithSeparator = content.endsWith(RS);
   if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
 
   const totalLines = lines.length; let exitCode;
-  const builder = makeOutputBuilder();
+  const builder = options.sharedBuilder || makeOutputBuilder(RS);
   // Only the very last physical line can be "not chomped" (i.e. lack a
-  // trailing newline in the original input); every other line was
-  // necessarily terminated by "\n" when we split on it.
-  const chompedFor = idx => (idx === lines.length - 1) ? endsWithNewline : true;
+  // trailing separator in the original input); every other line was
+  // necessarily terminated by RS when we split on it.
+  const chompedFor = idx => (idx === lines.length - 1) ? endsWithSeparator : true;
 
   const flatCommands = flattenCommands(commands);
   const labelIndex = buildLabelIndex(flatCommands);
 
-  let holdSpace = ""; let holdChomped = true; let lastPattern; const rangeStates = new Map();
+  let holdSpace = options.initialHoldSpace ?? ""; let holdChomped = options.initialHoldChomped ?? true;
+  let lastPattern = options.initialLastPattern; const rangeStates = new Map();
   const fileLineCache = new Map(); const fileLinePositions = new Map(); const fileWrites = new Map();
 
   // Deferred output (from `a`, `r`, `R`) is queued on state.deferredOutput
@@ -1142,12 +1163,12 @@ async function processContent(content, commands, silent, options = {}) {
   // behavior) or at the natural end of the current cycle.
   function flushDeferred(state) {
     for (const item of state.deferredOutput) {
-      let text = item.text; let chomped = item.chomped; let resolved = item.type !== "r";
+      let text = item.text; let chomped = item.chomped; let resolved = item.type !== "r"; let raw = false;
       if (item.type === "r" && vfs) {
         const filePath = item.filename;
         try {
           if (item.wholeFile) {
-            if (vfsHas(vfs, filePath)) { text = vfsGet(vfs, filePath).replace(/\n$/, ""); chomped = true; resolved = true; }
+            if (vfsHas(vfs, filePath)) { text = vfsGet(vfs, filePath); resolved = true; raw = true; }
           } else {
             if (!fileLineCache.has(filePath)) { if (vfsHas(vfs, filePath)) { fileLineCache.set(filePath, vfsGet(vfs, filePath).split("\n")); fileLinePositions.set(filePath, 0); } }
             const fileLines = fileLineCache.get(filePath); const pos = fileLinePositions.get(filePath);
@@ -1155,18 +1176,22 @@ async function processContent(content, commands, silent, options = {}) {
           }
         } catch (e) { /* ignore */ }
       }
-      if (resolved) builder.write(text, chomped);
+      if (!resolved) continue;
+      if (raw) builder.writeRaw(text);
+      else builder.write(text, chomped, item.sep);
     }
     state.deferredOutput = [];
   }
 
+  let didQuit = false;
+  let didExplicitQuit = false;
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
     const state = {
       ...createInitialState(totalLines, filename, rangeStates, extendedRegex, posix),
       patternSpace: lines[lineIndex], chomped: chompedFor(lineIndex),
       holdSpace, holdChomped, lastPattern, lineNumber: lineIndex + 1
     };
-    const ctx = { lines, currentLineIndex: lineIndex, silent, chompedFor, builder, flushDeferred };
+    const ctx = { lines, currentLineIndex: lineIndex, silent, chompedFor, builder, flushDeferred, RS };
 
     let cycleIterations = 0; state.linesConsumedInCycle = 0;
     do {
@@ -1188,6 +1213,8 @@ async function processContent(content, commands, silent, options = {}) {
     flushDeferred(state);
 
     if (state.quit || state.quitSilent) {
+      didQuit = true;
+      if (state.explicitQuit) didExplicitQuit = true;
       if (state.exitCode !== undefined) exitCode = state.exitCode;
       if (state.errorMessage) return { output: "", exitCode: exitCode || 1, errorMessage: state.errorMessage, errorCode: state.errorCode }; break;
     }
@@ -1195,7 +1222,7 @@ async function processContent(content, commands, silent, options = {}) {
 
   if (vfs) { for (const [filePath, fileContent] of fileWrites) vfsSet(vfs, filePath, fileContent); }
 
-  return { output: builder.result(), exitCode };
+  return { output: builder.result(), exitCode, holdSpace, holdChomped, lastPattern, quit: didQuit, explicitQuit: didExplicitQuit };
 }
 
 // ==========================================
@@ -1369,7 +1396,7 @@ export default async function sed(commandStr, options = {}) {
   let stdin = options.stdin !== undefined ? options.stdin : "";
   if (stdin === null) stdin = "";
 
-  const scripts = []; let silent = false; let inPlace = false; let extendedRegex = false; let posix = !!options.posix; const files = [];
+  const scripts = []; let silent = false; let inPlace = false; let extendedRegex = false; let posix = !!options.posix; let nullData = !!options.nullData; let separate = !!options.separate; const files = [];
   let implicitScript = [];
 
   if (args.length === 0 || (args.length === 1 && args[0].trim() === '')) {
@@ -1394,16 +1421,20 @@ export default async function sed(commandStr, options = {}) {
       }
     }
     else if (arg === "--posix") posix = true;
+    else if (arg === "--null-data" || arg === "--zero-terminated") nullData = true;
+    else if (arg === "--separate") separate = true;
     else if (arg.startsWith("--")) throw sedError(`sed: unknown option ${arg}`, 1);
     else if (arg === "-") files.push(arg);
     else if (arg.startsWith("-") && arg.length > 1) {
-      const knownFlags = new Set(['n', 'i', 'e', 'E', 'r', 'f']);
+      const knownFlags = new Set(['n', 'i', 'e', 'E', 'r', 'f', 's', 'z']);
       for (const ch of arg.slice(1)) {
         if (!knownFlags.has(ch)) throw sedError(`sed: invalid option -- '${ch}'`, 1);
       }
       if (arg.includes("n")) silent = true;
       if (arg.includes("i")) inPlace = true;
       if (arg.includes("E") || arg.includes("r")) extendedRegex = true;
+      if (arg.includes("s")) separate = true;
+      if (arg.includes("z")) nullData = true;
       if (arg.includes("f") && i + 1 < args.length) {
         const scriptFile = args[++i];
         if (!vfsHas(vfs, scriptFile)) throw sedError(`sed: couldn't open file ${scriptFile}: No such file or directory`, 2);
@@ -1439,7 +1470,7 @@ export default async function sed(commandStr, options = {}) {
 
   // If the implicit script ends with a bare a/i/c command, the text argument
   // was split off as the first file. Move it back onto the script.
-  const pendingTextCmd = /(?:^|;|\{|\n)\s*(?:[^;{}]*,\s*)?[^;{}\s]*\s*[aic]\s*$/;
+  const pendingTextCmd = /(?:^|[;{\n]|\s)(?:\d+|\$|\/(?:[^\/\\]|\\.)*\/)?\s*[aic]\s*$/;
   while (implicitScript.length > 0 && files.length > 0) {
     if (pendingTextCmd.test(implicitScript.join(' '))) {
       implicitScript.push(files.shift());
@@ -1464,7 +1495,7 @@ export default async function sed(commandStr, options = {}) {
       if (file === "-") continue;
       if (!vfsHas(vfs, file)) throw sedError(`sed: can't read ${file}: No such file or directory`, 2);
       const fileContent = vfsGet(vfs, file);
-      const result = await processContent(fileContent, commands, effectiveSilent, { filename: file, vfs, shell, extendedRegex: effectiveExtendedRegex, posix });
+      const result = await processContent(fileContent, commands, effectiveSilent, { filename: file, vfs, shell, extendedRegex: effectiveExtendedRegex, posix, nullData });
       if (result.errorMessage) throw sedError(result.errorMessage, result.errorCode || 1);
       vfsSet(vfs, file, result.output);
       if (result.exitCode !== undefined) lastExitCode = result.exitCode;
@@ -1472,14 +1503,55 @@ export default async function sed(commandStr, options = {}) {
     return options.exitCode ? { output: "", exitCode: lastExitCode ?? 0 } : "";
   }
 
-  let content = "";
   if (files.length === 0) {
-    content = stdin;
-    const result = await processContent(content, commands, effectiveSilent, { vfs, shell, extendedRegex: effectiveExtendedRegex, posix });
+    const result = await processContent(stdin, commands, effectiveSilent, { vfs, shell, extendedRegex: effectiveExtendedRegex, posix, nullData });
     if (result.errorMessage) throw sedError(result.errorMessage, result.errorCode || 1);
     return options.exitCode ? { output: result.output, exitCode: result.exitCode ?? 0 } : result.output;
   }
 
+  const RS = nullData ? "\0" : "\n";
+
+  if (separate) {
+    // -s: process each file as its own independent stream -- fresh line
+    // numbers, fresh $ semantics, fresh range/regex state -- except the
+    // hold space (and the "last regex used" memory for empty // reuse),
+    // which are real GNU sed's own global state and persist across files.
+    // Verified directly against real `sed -s`: numeric/regex ranges don't
+    // carry into the next file, but a value stashed in the hold space on
+    // file 1 is still there when file 2 starts.
+    //
+    // The output builder is also shared across files (rather than one per
+    // file) so the missing-trailing-newline deferral carries correctly
+    // across file boundaries: verified against real sed that a separator
+    // *is* inserted before the next file's output even when the previous
+    // file itself lacked a trailing newline -- the "no trailing newline"
+    // suppression only applies to the very last output of the whole run.
+    let stdinConsumed = false;
+    let holdSpace = ""; let holdChomped = true; let lastPattern;
+    const sharedBuilder = makeOutputBuilder(RS);
+    let lastExitCode;
+    for (const file of files) {
+      let fileContent;
+      if (file === "-") { if (stdinConsumed) fileContent = ""; else { fileContent = stdin; stdinConsumed = true; } }
+      else {
+        if (!vfsHas(vfs, file)) throw sedError(`sed: can't read ${file}: No such file or directory`, 2);
+        fileContent = vfsGet(vfs, file);
+      }
+      const result = await processContent(fileContent, commands, effectiveSilent, {
+        filename: file, vfs, shell, extendedRegex: effectiveExtendedRegex, posix, nullData,
+        initialHoldSpace: holdSpace, initialHoldChomped: holdChomped, initialLastPattern: lastPattern,
+        sharedBuilder
+      });
+      if (result.errorMessage) throw sedError(result.errorMessage, result.errorCode || 1);
+      holdSpace = result.holdSpace; holdChomped = result.holdChomped; lastPattern = result.lastPattern;
+      if (result.exitCode !== undefined) lastExitCode = result.exitCode;
+      if (result.explicitQuit) break;
+    }
+    const output = sharedBuilder.result();
+    return options.exitCode ? { output, exitCode: lastExitCode ?? 0 } : output;
+  }
+
+  let content = "";
   let stdinConsumed = false;
   for (const file of files) {
     let fileContent;
@@ -1488,11 +1560,11 @@ export default async function sed(commandStr, options = {}) {
       if (!vfsHas(vfs, file)) throw sedError(`sed: can't read ${file}: No such file or directory`, 2);
       fileContent = vfsGet(vfs, file);
     }
-    if (content.length > 0 && fileContent.length > 0 && !content.endsWith("\n")) content += "\n";
+    if (content.length > 0 && fileContent.length > 0 && !content.endsWith(RS)) content += RS;
     content += fileContent;
   }
 
-  const result = await processContent(content, commands, effectiveSilent, { filename: files.length === 1 ? files[0] : undefined, vfs, shell, extendedRegex: effectiveExtendedRegex, posix });
+  const result = await processContent(content, commands, effectiveSilent, { filename: files.length === 1 ? files[0] : undefined, vfs, shell, extendedRegex: effectiveExtendedRegex, posix, nullData });
   if (result.errorMessage) throw sedError(result.errorMessage, result.errorCode || 1);
   return options.exitCode ? { output: result.output, exitCode: result.exitCode ?? 0 } : result.output;
 }
