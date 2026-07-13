@@ -29,7 +29,11 @@ jobs:
         run: |
           npm i -D cross-env
           npm install
-
+          
       - name: Run tests
         run: |
           npm test
+
+      - name: Run fuzzer
+        run: |
+          npm fuzz-test
