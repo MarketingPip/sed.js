@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import sed from './sed.js';
+import sed from './index.js';
 
 // ---------- PRNG (seeded, reproducible) ----------
 function mulberry32(seed) {
