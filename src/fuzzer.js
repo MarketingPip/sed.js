@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import sed from './index.mjs';
+import sed from './index.js';
 
 function mulberry32(seed) {
   return function () {
