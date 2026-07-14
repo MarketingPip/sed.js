@@ -36,4 +36,8 @@ jobs:
 
       - name: Run fuzzer
         run: |
+          npm run ./src/benchmark.js
+          
+      - name: Run fuzzer
+        run: |
           npm run fuzz-test 100000
