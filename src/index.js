@@ -767,21 +767,26 @@ function isInRangeInternal(range, lineNum, totalLines, line, rangeStates, state)
       }
     }
 
-    if (!hasPatternStart && !hasPatternEnd && !hasRelativeEnd) {
+    if (!hasPatternStart && !hasPatternEnd && !hasRelativeEnd && rangeStates) {
       const startNum = typeof start === "number" ? start : start === "$" ? totalLines : 1;
       const endNum = typeof end === "number" ? end : end === "$" ? totalLines : totalLines;
+      const rangeKey = serializeRange(range);
+      let rangeState = rangeStates.get(rangeKey);
+      if (!rangeState) { rangeState = { closed: false }; rangeStates.set(rangeKey, rangeState); }
+
       if (startNum <= endNum) {
+        if (rangeState.closed) return { matched: false, closing: false };
         const matched = lineNum >= startNum && lineNum <= endNum;
-        return { matched, closing: matched && lineNum === endNum };
+        const closing = matched && lineNum === endNum;
+        if (closing) rangeState.closed = true;
+        return { matched, closing };
       }
-      if (rangeStates) {
-        const rangeKey = serializeRange(range); let rangeState = rangeStates.get(rangeKey);
-        if (!rangeState) { rangeState = { active: false }; rangeStates.set(rangeKey, rangeState); }
-        if (!rangeState.completed && lineNum >= startNum) {
-          rangeState.completed = true; rangeStates.set(rangeKey, rangeState);
-          if (lineNum === startNum) return { matched: true, closing: true };
-        }
-        return { matched: false, closing: false };
+
+      // Inverted range (addr2 < addr1): per POSIX/GNU, matches only the
+      // single line addr1, and only the first time that line is reached.
+      if (!rangeState.closed && lineNum >= startNum) {
+        rangeState.closed = true;
+        if (lineNum === startNum) return { matched: true, closing: true };
       }
       return { matched: false, closing: false };
     }
