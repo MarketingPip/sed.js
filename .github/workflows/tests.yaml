@@ -40,4 +40,4 @@ jobs:
           
       - name: Run fuzzer
         run: |
-          npm run fuzz-test 100000
+          npm run fuzz-test 200000
