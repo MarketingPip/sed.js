@@ -34,9 +34,9 @@ jobs:
         run: |
           npm test
 
-      - name: Run fuzzer
-        run: |
-          node ./src/benchmark.js
+#      - name: Run fuzzer
+#        run: |
+#          node ./src/benchmark.js
           
       - name: Run fuzzer
         run: |
