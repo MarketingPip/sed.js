@@ -712,9 +712,20 @@ function matchesAddress(address, lineNum, totalLines, line, state) {
       let rawPattern = address.pattern;
       if (rawPattern === "" && state?.lastPattern) rawPattern = state.lastPattern;
       else if (rawPattern !== "" && state) state.lastPattern = rawPattern;
-      const pattern = normalizeForJs(state?.extendedRegex ? rawPattern : breToEre(rawPattern, !!state?.posix));
-      const jsFlags = "s" + (address.ignoreCase ? "i" : "") + (address.multiline ? "m" : "");
-      return new RegExp(pattern, jsFlags).test(line);
+
+      let regex;
+      if (address._cachedRawPattern === rawPattern && address._cachedExtended === !!state?.extendedRegex && address._cachedPosix === !!state?.posix) {
+        regex = address._cachedRegex;
+      } else {
+        const pattern = normalizeForJs(state?.extendedRegex ? rawPattern : breToEre(rawPattern, !!state?.posix));
+        const jsFlags = "s" + (address.ignoreCase ? "i" : "") + (address.multiline ? "m" : "");
+        regex = new RegExp(pattern, jsFlags);
+        address._cachedRawPattern = rawPattern;
+        address._cachedExtended = !!state?.extendedRegex;
+        address._cachedPosix = !!state?.posix;
+        address._cachedRegex = regex;
+      }
+      return regex.test(line);
     } catch { return false; }
   }
   return false;
@@ -886,6 +897,64 @@ function processReplacement(replacement, match, groups, posix = false) {
   return result;
 }
 
+// Fast path: a synchronous copy of the matching loop below, used whenever
+// the substitution doesn't need to await a shell callback (the vast
+// majority of substitutions). This avoids async function call / Promise
+// overhead per substitution while preserving sed's exact match semantics --
+// notably that a zero-length match immediately following the end of the
+// previous match is skipped rather than replaced again (verified against
+// real sed: `s/a*/X/g` on "bab" must give "XbXbX", not "XbXXbX" -- native
+// String.prototype.replace does NOT implement this rule, so it can't be
+// used here as-is despite being faster in isolation).
+function doSyncReplace(input, regex, cmd) {
+  let result = ""; let pos = 0; let skipZeroLengthAtNextPos = false;
+  let count = 0; let matchedAny = false;
+
+  while (pos <= input.length) {
+    regex.lastIndex = pos; const match = regex.exec(input);
+    if (!match) { result += input.slice(pos); break; }
+    if (match.index !== pos) { result += input.slice(pos, match.index); pos = match.index; skipZeroLengthAtNextPos = false; continue; }
+
+    const matchedText = match[0]; const groups = match.slice(1);
+    if (skipZeroLengthAtNextPos && matchedText.length === 0) {
+      if (pos < input.length) { result += input[pos]; pos++; } else { break; }
+      skipZeroLengthAtNextPos = false; continue;
+    }
+
+    count++;
+    let doReplace = false;
+    if (cmd.global && cmd.nthOccurrence) {
+      if (count >= cmd.nthOccurrence) doReplace = true;
+    } else if (cmd.global) {
+      doReplace = true;
+    } else if (cmd.nthOccurrence) {
+      if (count === cmd.nthOccurrence) doReplace = true;
+    } else {
+      if (count === 1) doReplace = true;
+    }
+
+    if (doReplace) {
+      matchedAny = true;
+      result += processReplacement(cmd.replacement, matchedText, groups, !!cmd.posix);
+    } else {
+      result += matchedText;
+    }
+
+    skipZeroLengthAtNextPos = false;
+    if (matchedText.length === 0) {
+      if (pos < input.length) { result += input[pos]; pos++; } else { break; }
+    } else {
+      pos += matchedText.length; skipZeroLengthAtNextPos = true;
+    }
+
+    if (!cmd.global && count >= (cmd.nthOccurrence || 1)) {
+      result += input.slice(pos);
+      break;
+    }
+  }
+  return { result, matchedAny };
+}
+
 async function doAsyncReplace(input, regex, cmd, shell) {
   let result = ""; let pos = 0; let skipZeroLengthAtNextPos = false;
   let count = 0; let matchedAny = false;
@@ -950,25 +1019,29 @@ async function executeCommand(cmd, state, ctx, shell) {
 
   switch (cmd.type) {
     case "substitute": {
-      let flags = "";
-      if (cmd.global) flags += "g";
-      if (cmd.ignoreCase) flags += "i";
       let rawPattern = cmd.pattern;
       if (rawPattern === "" && state.lastPattern) rawPattern = state.lastPattern;
       else if (rawPattern !== "") state.lastPattern = rawPattern;
-      const pattern = normalizeForJs(cmd.extendedRegex ? rawPattern : breToEre(rawPattern, !!cmd.posix));
+
+      let execRegex;
+      if (cmd._cachedRawPattern === rawPattern) {
+        execRegex = cmd._cachedExecRegex;
+      } else {
+        const pattern = normalizeForJs(cmd.extendedRegex ? rawPattern : breToEre(rawPattern, !!cmd.posix));
+        execRegex = new RegExp(pattern, "gs" + (cmd.ignoreCase ? "i" : "") + (cmd.multiline ? "m" : ""));
+        cmd._cachedRawPattern = rawPattern;
+        cmd._cachedExecRegex = execRegex;
+      }
 
       try {
-        const execRegex = new RegExp(pattern, "gs" + (cmd.ignoreCase ? "i" : "") + (cmd.multiline ? "m" : ""));
-        const testRegex = new RegExp(pattern, "s" + (cmd.ignoreCase ? "i" : "") + (cmd.multiline ? "m" : ""));
-        if (testRegex.test(state.patternSpace)) {
-          const { result, matchedAny } = await doAsyncReplace(state.patternSpace, execRegex, cmd, shell);
-          if (matchedAny) {
-            state.substitutionMade = true;
-            state.patternSpace = result;
-            if (cmd.printOnMatch) ctx.builder.write(state.patternSpace, state.chomped);
-            if (cmd.writeFilename) state.pendingFileWrites.push({ filename: cmd.writeFilename, content: `${state.patternSpace}\n` });
-          }
+        const { result, matchedAny } = cmd.executeShell
+          ? await doAsyncReplace(state.patternSpace, execRegex, cmd, shell)
+          : doSyncReplace(state.patternSpace, execRegex, cmd);
+        if (matchedAny) {
+          state.substitutionMade = true;
+          state.patternSpace = result;
+          if (cmd.printOnMatch) ctx.builder.write(state.patternSpace, state.chomped);
+          if (cmd.writeFilename) state.pendingFileWrites.push({ filename: cmd.writeFilename, content: `${state.patternSpace}\n` });
         }
       } catch (e) { /* ignore */ }
       break;
