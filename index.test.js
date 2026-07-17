@@ -1380,7 +1380,7 @@ describe('Substitution Flag Combinations', () => {
   });
 });
 
-describe('Case Conversion in Replacement (\U \L \u \l \E)', () => {
+describe('Case Conversion in Replacement (\\U \\L \\u \\l \\E)', () => {
   it('\U uppercases the rest of the replacement', async () => {
     await expectSameSedOutput({
       portCommand: 's/hello/\U&/',
