@@ -652,13 +652,40 @@ function createInitialState(totalLines, filename, rangeStates, extendedRegex, po
   return {
     patternSpace: "", holdSpace: "", lineNumber: 0, totalLines,
     chomped: true, holdChomped: true, extendedRegex: !!extendedRegex, posix: !!posix,
-    deleted: false, printed: false, quit: false, quitSilent: false,
-    exitCode: undefined, errorMessage: undefined,
+    deleted: false, printed: false, quit: false, quitSilent: false, explicitQuit: false,
+    exitCode: undefined, errorMessage: undefined, errorCode: undefined,
     substitutionMade: false,
     deferredOutput: [],
     restartCycle: false, inDRestartedCycle: false, currentFilename: filename,
     pendingFileWrites: [], rangeStates: rangeStates || new Map(), linesConsumedInCycle: 0
   };
+}
+
+// Resets the subset of `state` fields that are per-line (i.e. must not
+// leak from one line's processing into the next) in place on an existing
+// state object, instead of allocating a fresh state object every line.
+// holdSpace/holdChomped/lastPattern/rangeStates/totalLines/extendedRegex/
+// posix/currentFilename are deliberately untouched here -- those persist
+// across lines by design (hold space survives the whole file; range state
+// tracks activation across lines; etc).
+function resetLineState(state, patternSpace, chomped, lineNumber) {
+  state.patternSpace = patternSpace;
+  state.chomped = chomped;
+  state.lineNumber = lineNumber;
+  state.deleted = false;
+  state.printed = false;
+  state.quit = false;
+  state.quitSilent = false;
+  state.explicitQuit = false;
+  state.exitCode = undefined;
+  state.errorMessage = undefined;
+  state.errorCode = undefined;
+  state.substitutionMade = false;
+  state.deferredOutput.length = 0;
+  state.restartCycle = false;
+  state.inDRestartedCycle = false;
+  state.pendingFileWrites.length = 0;
+  state.linesConsumedInCycle = 0;
 }
 
 // Output builder implementing GNU sed's "missing newline" deferred semantics:
@@ -744,12 +771,29 @@ function serializeRange(range) {
   return `${serializeAddr(range.start)},${serializeAddr(range.end)}`;
 }
 
+// Shared, reused address-match result object. Every isInRange(Internal)
+// call mutates and returns this same object rather than allocating a fresh
+// {matched, closing} literal. This is safe because every call site reads
+// .matched/.closing synchronously and immediately after the call and never
+// retains a reference past the next isInRange call (verified: no caller
+// stores two concurrent results, and there's no re-entrancy -- neither
+// function calls itself or the other before returning). Profiling showed
+// this allocation (2 short-lived objects per address check, on every
+// command, on every line) was the dominant GC source for address-heavy
+// scripts over large inputs.
+const _addrResult = { matched: false, closing: false };
+function setAddrResult(matched, closing) {
+  _addrResult.matched = matched;
+  _addrResult.closing = closing;
+  return _addrResult;
+}
+
 function isInRangeInternal(range, lineNum, totalLines, line, rangeStates, state) {
-  if (!range || (!range.start && !range.end)) return { matched: true, closing: true };
+  if (!range || (!range.start && !range.end)) return setAddrResult(true, true);
   const { start, end } = range;
   if (start !== undefined && end === undefined) {
     const matched = matchesAddress(start, lineNum, totalLines, line, state);
-    return { matched, closing: matched };
+    return setAddrResult(matched, matched);
   }
 
   if (start !== undefined && end !== undefined) {
@@ -762,19 +806,19 @@ function isInRangeInternal(range, lineNum, totalLines, line, rangeStates, state)
       const rangeKey = serializeRange(range); let rangeState = rangeStates.get(rangeKey);
       if (!rangeState) { rangeState = { active: false }; rangeStates.set(rangeKey, rangeState); }
       if (!rangeState.active) {
-        if (rangeState.completed) return { matched: false, closing: false };
+        if (rangeState.completed) return setAddrResult(false, false);
         const startMatches = typeof start === "number" ? lineNum >= start : matchesAddress(start, lineNum, totalLines, line, state);
         if (startMatches) {
           rangeState.active = true; rangeState.startLine = lineNum; rangeStates.set(rangeKey, rangeState);
-          if (end.offset === 0) { rangeState.active = false; if (typeof start === "number") rangeState.completed = true; rangeStates.set(rangeKey, rangeState); return { matched: true, closing: true }; }
-          return { matched: true, closing: false };
+          if (end.offset === 0) { rangeState.active = false; if (typeof start === "number") rangeState.completed = true; rangeStates.set(rangeKey, rangeState); return setAddrResult(true, true); }
+          return setAddrResult(true, false);
         }
-        return { matched: false, closing: false };
+        return setAddrResult(false, false);
       } else {
         const target = (rangeState.startLine || lineNum) + end.offset;
         const closing = lineNum >= target;
         if (closing) { rangeState.active = false; if (typeof start === "number") rangeState.completed = true; rangeStates.set(rangeKey, rangeState); }
-        return { matched: true, closing };
+        return setAddrResult(true, closing);
       }
     }
 
@@ -786,20 +830,20 @@ function isInRangeInternal(range, lineNum, totalLines, line, rangeStates, state)
       if (!rangeState) { rangeState = { closed: false }; rangeStates.set(rangeKey, rangeState); }
 
       if (startNum <= endNum) {
-        if (rangeState.closed) return { matched: false, closing: false };
+        if (rangeState.closed) return setAddrResult(false, false);
         const matched = lineNum >= startNum && lineNum <= endNum;
         const closing = matched && lineNum === endNum;
         if (closing) rangeState.closed = true;
-        return { matched, closing };
+        return setAddrResult(matched, closing);
       }
 
       // Inverted range (addr2 < addr1): per POSIX/GNU, matches only the
       // single line addr1, and only the first time that line is reached.
       if (!rangeState.closed && lineNum >= startNum) {
         rangeState.closed = true;
-        if (lineNum === startNum) return { matched: true, closing: true };
+        if (lineNum === startNum) return setAddrResult(true, true);
       }
-      return { matched: false, closing: false };
+      return setAddrResult(false, false);
     }
 
     if (rangeStates) {
@@ -816,7 +860,7 @@ function isInRangeInternal(range, lineNum, totalLines, line, rangeStates, state)
         return matchesAddress(end, lineNum, totalLines, line, state) ? "close" : "open";
       };
       if (!rangeState.active) {
-        if (rangeState.completed) return { matched: false, closing: false };
+        if (rangeState.completed) return setAddrResult(false, false);
         let startMatches = typeof start === "number" ? lineNum >= start : matchesAddress(start, lineNum, totalLines, line, state);
         if (startMatches) {
           rangeState.active = true; rangeState.startLine = lineNum; rangeStates.set(rangeKey, rangeState);
@@ -830,26 +874,26 @@ function isInRangeInternal(range, lineNum, totalLines, line, rangeStates, state)
             const status = endStatus();
             if (status === "close" || status === "over") { rangeState.active = false; if (typeof start === "number") rangeState.completed = true; rangeStates.set(rangeKey, rangeState); closing = true; }
           }
-          return { matched: true, closing };
+          return setAddrResult(true, closing);
         }
-        return { matched: false, closing: false };
+        return setAddrResult(false, false);
       } else {
         const status = endStatus();
-        if (status === "over") { rangeState.active = false; if (typeof start === "number") rangeState.completed = true; rangeStates.set(rangeKey, rangeState); return { matched: false, closing: false }; }
-        if (status === "close") { rangeState.active = false; if (typeof start === "number") rangeState.completed = true; rangeStates.set(rangeKey, rangeState); return { matched: true, closing: true }; }
-        return { matched: true, closing: false };
+        if (status === "over") { rangeState.active = false; if (typeof start === "number") rangeState.completed = true; rangeStates.set(rangeKey, rangeState); return setAddrResult(false, false); }
+        if (status === "close") { rangeState.active = false; if (typeof start === "number") rangeState.completed = true; rangeStates.set(rangeKey, rangeState); return setAddrResult(true, true); }
+        return setAddrResult(true, false);
       }
     }
     const matched = matchesAddress(start, lineNum, totalLines, line, state);
-    return { matched, closing: matched };
+    return setAddrResult(matched, matched);
   }
-  return { matched: true, closing: true };
+  return setAddrResult(true, true);
 }
 
 function isInRange(range, lineNum, totalLines, line, rangeStates, state) {
-  const { matched, closing } = isInRangeInternal(range, lineNum, totalLines, line, rangeStates, state);
-  if (range?.negated) return { matched: !matched, closing: !matched };
-  return { matched, closing };
+  const r = isInRangeInternal(range, lineNum, totalLines, line, rangeStates, state);
+  if (range?.negated) { const m = r.matched; r.matched = !m; r.closing = !m; }
+  return r;
 }
 
 function processReplacement(replacement, match, groups, posix = false) {
@@ -1258,23 +1302,23 @@ async function processContent(content, commands, silent, options = {}) {
       if (raw) builder.writeRaw(text);
       else builder.write(text, chomped, item.sep);
     }
-    state.deferredOutput = [];
+    state.deferredOutput.length = 0;
   }
 
   let didQuit = false;
   let didExplicitQuit = false;
+  const state = createInitialState(totalLines, filename, rangeStates, extendedRegex, posix);
+  state.holdSpace = holdSpace; state.holdChomped = holdChomped; state.lastPattern = lastPattern;
+  const ctx = { lines, currentLineIndex: 0, silent, chompedFor, builder, flushDeferred, RS };
+
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
-    const state = {
-      ...createInitialState(totalLines, filename, rangeStates, extendedRegex, posix),
-      patternSpace: lines[lineIndex], chomped: chompedFor(lineIndex),
-      holdSpace, holdChomped, lastPattern, lineNumber: lineIndex + 1
-    };
-    const ctx = { lines, currentLineIndex: lineIndex, silent, chompedFor, builder, flushDeferred, RS };
+    resetLineState(state, lines[lineIndex], chompedFor(lineIndex), lineIndex + 1);
+    ctx.currentLineIndex = lineIndex;
 
     let cycleIterations = 0; state.linesConsumedInCycle = 0;
     do {
       cycleIterations++; if (cycleIterations > 10000) break;
-      state.restartCycle = false; state.pendingFileWrites = [];
+      state.restartCycle = false; state.pendingFileWrites.length = 0;
       await executeCommands(flatCommands, labelIndex, state, ctx, shell);
       for (const write of state.pendingFileWrites) { const filePath = write.filename; fileWrites.set(filePath, (fileWrites.get(filePath) || "") + write.content); }
     } while (state.restartCycle && !state.deleted && !state.quit && !state.quitSilent);
