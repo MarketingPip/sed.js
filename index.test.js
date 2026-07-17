@@ -1245,11 +1245,12 @@ describe('Range-Address Statefulness (regression coverage)', () => {
     // Single N jumps the line counter from 1 to 2. Range 1,1 has already
     // been "passed" (its end is behind the current line), so it must never
     // match at all -- not even a single-line match.
-    await expectSameSedOutput({
+    const { port, system } = await expectSameSedOutput({
       portCommand: '-n 1{N};1,1{=;p}',
       systemArgs: ['-n', '1{N};1,1{=;p}'],
       stdin: 'L1\nL2\n',
     });
+    expect(port.data).toBe('');
   });
 
   it('inverted range (addr2 < addr1) matches only the single start line, once', async () => {
@@ -1300,11 +1301,14 @@ describe('Substitution: Zero-Length Match Semantics', () => {
 
 describe('Trailing Newline Preservation', () => {
   it('preserves absence of a trailing newline on stdin', async () => {
-    await expectSameSedOutput({
+    const { port, system } = await expectSameSedOutput({
       portCommand: 's/a/A/',
       systemArgs: ['s/a/A/'],
       stdin: 'abc', // no trailing \n
     });
+    // normalizeEol strips a *single* trailing \n for comparison purposes,
+    // so assert directly against the raw (non-normalized) result here.
+    expect(port.data).toBe('Abc');
   });
 
   it('adds no extra newline when substituting on the last unterminated line', async () => {
@@ -1318,12 +1322,10 @@ describe('Trailing Newline Preservation', () => {
 
 describe('POSIX Mode (--posix)', () => {
   it('rejects line address 0 as a range start', async () => {
-    await expectSameSedOutput({
-      portCommand: '--posix 0,/a/d',
-      systemArgs: ['--posix', '0,/a/d'],
-      stdin: 'a\nb\n',
-      expectSuccess: false,
-    });
+    const port = await runSed('--posix 0,/a/d', 'a\nb\n');
+    const system = await runSystemSed(['--posix', '0,/a/d'], 'a\nb\n');
+    expect(port.success).toBe(false);
+    expect(system.success).toBe(false);
   });
 
   it('allows GNU extension 0,/regex/ outside posix mode (matches on line 1 if regex matches there)', async () => {
@@ -1335,18 +1337,16 @@ describe('POSIX Mode (--posix)', () => {
   });
 
   it('requires backslash-newline before a/i/c text in posix mode', async () => {
-    await expectSameSedOutput({
-      portCommand: '--posix 1a hello',
-      systemArgs: ['--posix', '1a hello'],
-      stdin: 'x\n',
-      expectSuccess: false,
-    });
+    const port = await runSed('--posix 1a hello', 'x\n');
+    const system = await runSystemSed(['--posix', '1a hello'], 'x\n');
+    expect(port.success).toBe(false);
+    expect(system.success).toBe(false);
   });
 
-  it('rejects GNU-only \+ quantifier semantics in posix BRE (literal +, not one-or-more)', async () => {
+  it('rejects GNU-only \\+ quantifier semantics in posix BRE (literal +, not one-or-more)', async () => {
     await expectSameSedOutput({
-      portCommand: '--posix s/a\+/X/',
-      systemArgs: ['--posix', 's/a\+/X/'],
+      portCommand: '--posix s/a\\+/X/',
+      systemArgs: ['--posix', 's/a\\+/X/'],
       stdin: 'a+b\n',
     });
   });
@@ -1381,26 +1381,26 @@ describe('Substitution Flag Combinations', () => {
 });
 
 describe('Case Conversion in Replacement (\\U \\L \\u \\l \\E)', () => {
-  it('\U uppercases the rest of the replacement', async () => {
+  it('\\U uppercases the rest of the replacement', async () => {
     await expectSameSedOutput({
-      portCommand: 's/hello/\U&/',
-      systemArgs: ['s/hello/\U&/'],
+      portCommand: 's/hello/\\U&/',
+      systemArgs: ['s/hello/\\U&/'],
       stdin: 'hello world\n',
     });
   });
 
-  it('\u uppercases only the next character', async () => {
+  it('\\u uppercases only the next character', async () => {
     await expectSameSedOutput({
-      portCommand: 's/\w\+/\u&/',
-      systemArgs: ['s/\w\+/\u&/'],
+      portCommand: 's/\\w\\+/\\u&/',
+      systemArgs: ['s/\\w\\+/\\u&/'],
       stdin: 'hello world\n',
     });
   });
 
-  it('\U ... \E scopes the uppercase to a portion of the replacement', async () => {
+  it('\\U ... \\E scopes the uppercase to a portion of the replacement', async () => {
     await expectSameSedOutput({
-      portCommand: 's/\(foo\)\(bar\)/\U\1\E\2/',
-      systemArgs: ['s/\(foo\)\(bar\)/\U\1\E\2/'],
+      portCommand: 's/\\(foo\\)\\(bar\\)/\\U\\1\\E\\2/',
+      systemArgs: ['s/\\(foo\\)\\(bar\\)/\\U\\1\\E\\2/'],
       stdin: 'foobar\n',
     });
   });
@@ -1440,11 +1440,12 @@ describe('In-Place Editing (-i)', () => {
 
 describe('NUL-Separated Records (-z / --null-data)', () => {
   it('splits and rejoins on NUL instead of newline', async () => {
-    await expectSameSedOutput({
-      portCommand: '-z s/a/A/',
-      systemArgs: ['-z', 's/a/A/'],
-      stdin: 'a\0a\0',
-    });
+    const port = await runSed(['-z', 's/a/A/'], 'a\0a\0');
+    const system = await runSystemSed(['-z', 's/a/A/'], 'a\0a\0');
+    expect(port.success).toBe(true);
+    if (system.success) {
+      expect(port.data).toBe(system.data);
+    }
   });
 });
 
@@ -1505,12 +1506,9 @@ describe('Concurrency Safety', () => {
 
 describe('Runaway Script Protection', () => {
   it('throws rather than hanging on an unconditional infinite branch loop', async () => {
-    await expectSameSedOutput({
-      portCommand: ':a;s/x/xx/;ba',
-      systemArgs: [':a;s/x/xx/;ba'],
-      stdin: 'x',
-      expectSuccess: false,
-    });
+    const port = await runSed(':a;s/x/xx/;ba', 'x');
+    expect(port.success).toBe(false);
+    expect(port.error).toMatch(/limit exceeded|infinite loop/i);
   });
 });
 
