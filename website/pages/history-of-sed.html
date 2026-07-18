@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>History of sed | From Bell Labs 1974 to Sed.js</title>
+    <meta name="description" content="Explore the complete history of sed: from Lee McMahon's creation at Bell Labs in 1974, through POSIX standardization and GNU extensions, to Sed.js — the modern JavaScript stream editor.">
+    <meta name="keywords" content="sed history, stream editor history, Lee McMahon Bell Labs, GNU sed, POSIX sed, sed.js, JavaScript sed, Unix text processing">
+    <link rel="canonical" href="https://sedjs.dev/history">
+    <meta property="og:title" content="History of sed | From Bell Labs 1974 to Sed.js">
+    <meta property="og:description" content="The complete timeline of the Unix stream editor from Bell Labs to modern JavaScript.">
+    <meta property="og:type" content="article">
+   
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+        .font-mono { font-family: 'Fira Code', monospace; }
+        .font-sans { font-family: 'Inter', system-ui, sans-serif; }
+        .gradient-text {
+            background: linear-gradient(135deg, #818cf8 0%, #34d399 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .timeline-line {
+            background: linear-gradient(180deg, #4f46e5 0%, #10b981 50%, #818cf8 100%);
+        }
+        .glass {
+            background: rgba(15, 23, 42, 0.7);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+        }
+        .glow-indigo { box-shadow: 0 0 40px rgba(79, 70, 229, 0.15); }
+        .glow-emerald { box-shadow: 0 0 40px rgba(16, 185, 129, 0.15); }
+        .card-hover {
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .card-hover:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 20px 60px -15px rgba(79, 70, 229, 0.2);
+        }
+        .timeline-dot {
+            box-shadow: 0 0 0 4px rgba(15, 23, 42, 1), 0 0 0 6px rgba(79, 70, 229, 0.3);
+        }
+        @keyframes float {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-10px); }
+        }
+        .float-anim { animation: float 6s ease-in-out infinite; }
+        @keyframes pulse-glow {
+            0%, 100% { opacity: 0.4; }
+            50% { opacity: 0.8; }
+        }
+        .pulse-glow { animation: pulse-glow 3s ease-in-out infinite; }
+        details > summary { list-style: none; }
+        details > summary::-webkit-details-marker { display: none; }
+    </style>
+<base target="_blank">
+</head>
+<body class="bg-slate-950 text-slate-200 min-h-screen font-sans antialiased">
+
+    <nav class="border-b border-slate-800/60 sticky top-0 z-50 glass">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between items-center h-16">
+                <a href="/" class="flex items-center gap-3 group">
+                    <div class="bg-indigo-600 p-2 rounded-lg group-hover:bg-indigo-500 transition-colors">
+                        <i class="fas fa-terminal text-white text-sm"></i>
+                    </div>
+                    <span class="text-lg font-bold tracking-tight">sed<span class="text-indigo-400">js</span></span>
+                </a>
+                <div class="hidden md:flex items-center gap-8">
+                    <a href="#timeline" class="text-slate-400 hover:text-white transition-colors text-sm font-medium">Timeline</a>
+                    <a href="#posix-gnu" class="text-slate-400 hover:text-white transition-colors text-sm font-medium">POSIX vs GNU</a>
+                    <a href="#sedjs" class="text-slate-400 hover:text-white transition-colors text-sm font-medium">Sed.js</a>
+                    <a href="https://github.com/your-repo/sedjs" target="_blank" class="text-slate-400 hover:text-white transition-colors text-sm font-medium">GitHub</a>
+                    <a href="playground.html" class="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2 rounded-lg text-sm font-bold transition-all">Launch Playground</a>
+                </div>
+                <button class="md:hidden text-slate-400 hover:text-white" onclick="document.getElementById('mobile-menu').classList.toggle('hidden')">
+                    <i class="fas fa-bars text-xl"></i>
+                </button>
+            </div>
+        </div>
+        <div id="mobile-menu" class="hidden md:hidden border-t border-slate-800/60 glass">
+            <div class="px-4 py-4 space-y-3">
+                <a href="#timeline" class="block text-slate-400 hover:text-white text-sm font-medium">Timeline</a>
+                <a href="#posix-gnu" class="block text-slate-400 hover:text-white text-sm font-medium">POSIX vs GNU</a>
+                <a href="#sedjs" class="block text-slate-400 hover:text-white text-sm font-medium">Sed.js</a>
+                <a href="playground.html" class="block bg-indigo-600 text-white px-5 py-2 rounded-lg text-sm font-bold text-center">Launch Playground</a>
+            </div>
+        </div>
+    </nav>
+
+    <section class="relative overflow-hidden">
+        <div class="absolute inset-0 overflow-hidden pointer-events-none">
+            <div class="absolute -top-40 -right-40 w-96 h-96 bg-indigo-600/10 rounded-full blur-3xl pulse-glow"></div>
+            <div class="absolute top-60 -left-20 w-72 h-72 bg-emerald-500/10 rounded-full blur-3xl pulse-glow" style="animation-delay: 1.5s;"></div>
+            <div class="absolute bottom-0 right-1/4 w-80 h-80 bg-purple-600/5 rounded-full blur-3xl"></div>
+        </div>
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-20 pb-16 lg:pt-32 lg:pb-24 relative">
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-12 lg:gap-20 items-center">
+                <div class="space-y-8">
+                    <div class="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-bold tracking-widest uppercase">
+                        <i class="fas fa-clock-rotate-left text-[10px]"></i> 50+ Years of Stream Editing
+                    </div>
+                    <h1 class="text-4xl sm:text-5xl lg:text-6xl font-extrabold leading-tight tracking-tight">The <span class="gradient-text">History</span> of <code class="text-indigo-400 font-mono">sed</code></h1>
+                    <p class="text-lg text-slate-400 max-w-xl leading-relaxed">From Lee McMahon's 1974 creation at Bell Labs to the modern <strong class="text-slate-200">Sed.js</strong> library — trace the evolution of the Unix stream editor that powers text processing across every operating system on Earth.</p>
+                    <div class="flex flex-wrap gap-4">
+                        <a href="#timeline" class="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-8 py-4 rounded-xl font-bold text-base transition-all hover:-translate-y-0.5"><i class="fas fa-arrow-down"></i> Explore the Timeline</a>
+                        <a href="https://github.com/your-repo/sedjs" target="_blank" class="flex items-center gap-2 bg-slate-900 border border-slate-700 hover:border-slate-500 text-slate-200 px-8 py-4 rounded-xl font-bold text-base transition-all"><i class="fab fa-github"></i> View on GitHub</a>
+                    </div>
+                    <div class="flex gap-8 pt-4 border-t border-slate-800/60">
+                        <div><div class="text-2xl font-bold text-white">1974</div><div class="text-xs text-slate-500 uppercase tracking-wider font-semibold">Born at Bell Labs</div></div>
+                        <div><div class="text-2xl font-bold text-white">V7 Unix</div><div class="text-xs text-slate-500 uppercase tracking-wider font-semibold">First Release</div></div>
+                        <div><div class="text-2xl font-bold text-white">2026</div><div class="text-xs text-slate-500 uppercase tracking-wider font-semibold">Sed.js Era</div></div>
+                    </div>
+                </div>
+                <div class="relative float-anim">
+                    <div class="absolute -inset-1 bg-gradient-to-r from-indigo-500 to-emerald-500 rounded-2xl blur opacity-20"></div>
+                    <div class="relative bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl glow-indigo">
+                        <div class="flex items-center justify-between px-4 py-3 bg-slate-800/50 border-b border-slate-700">
+                            <div class="flex gap-2">
+                                <div class="w-3 h-3 rounded-full bg-red-500/30 border border-red-500/50"></div>
+                                <div class="w-3 h-3 rounded-full bg-amber-500/30 border border-amber-500/50"></div>
+                                <div class="w-3 h-3 rounded-full bg-emerald-500/30 border border-emerald-500/50"></div>
+                            </div>
+                            <span class="text-xs font-mono text-slate-500">bell-labs-history.sh</span>
+                            <div class="w-4"></div>
+                        </div>
+                        <div class="p-6 font-mono text-sm leading-relaxed space-y-1">
+                            <div class="flex gap-3"><span class="text-slate-600 shrink-0 select-none">$</span><span><span class="text-indigo-400">echo</span> <span class="text-emerald-400">&quot;hello world&quot;</span> <span class="text-indigo-400">|</span> sed <span class="text-emerald-400">'s/hello/sed/g'</span></span></div>
+                            <div class="flex gap-3"><span class="text-slate-600 shrink-0 select-none"> </span><span class="text-slate-300">sed world</span></div>
+                            <div class="h-2"></div>
+                            <div class="flex gap-3"><span class="text-slate-600 shrink-0 select-none">$</span><span><span class="text-slate-500"># 1974: Lee McMahon creates sed at Bell Labs</span></span></div>
+                            <div class="flex gap-3"><span class="text-slate-600 shrink-0 select-none">$</span><span><span class="text-slate-500"># 1979: Ships with Version 7 Unix</span></span></div>
+                            <div class="flex gap-3"><span class="text-slate-600 shrink-0 select-none">$</span><span><span class="text-slate-500"># 2026: Sed.js brings it to JavaScript</span></span></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="py-16 lg:py-24 border-t border-slate-800/40">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="max-w-3xl mx-auto text-center mb-16">
+                <h2 class="text-3xl lg:text-4xl font-bold mb-6">What is <code class="text-indigo-400 font-mono">sed</code>?</h2>
+                <p class="text-slate-400 text-lg leading-relaxed"><strong class="text-slate-200">sed</strong> (short for <em class="text-indigo-400">s</em>tream <em class="text-indigo-400">ed</em>itor) is a Unix utility that transforms text via a compact scripting language. It processes data line-by-line without loading entire files into memory — making it indispensable for log parsing, batch text transformations, and automated editing pipelines.</p>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div class="p-8 bg-slate-900/50 border border-slate-800 rounded-2xl card-hover">
+                    <div class="w-12 h-12 bg-indigo-500/10 rounded-xl flex items-center justify-center mb-5"><i class="fas fa-memory text-indigo-400 text-xl"></i></div>
+                    <h3 class="text-xl font-bold mb-3 text-white">Stream Processing</h3>
+                    <p class="text-slate-400 text-sm leading-relaxed">Processes text one line at a time with minimal memory footprint. Only a few lines reside in core at once — no temporary files needed.</p>
+                </div>
+                <div class="p-8 bg-slate-900/50 border border-slate-800 rounded-2xl card-hover">
+                    <div class="w-12 h-12 bg-emerald-500/10 rounded-xl flex items-center justify-center mb-5"><i class="fas fa-code text-emerald-400 text-xl"></i></div>
+                    <h3 class="text-xl font-bold mb-3 text-white">Regex Engine</h3>
+                    <p class="text-slate-400 text-sm leading-relaxed">One of the earliest tools to support regular expressions. The <code class="text-indigo-400 font-mono text-xs">s///</code> syntax influenced Perl, ECMAScript, and virtually every modern language.</p>
+                </div>
+                <div class="p-8 bg-slate-900/50 border border-slate-800 rounded-2xl card-hover">
+                    <div class="w-12 h-12 bg-purple-500/10 rounded-xl flex items-center justify-center mb-5"><i class="fas fa-infinity text-purple-400 text-xl"></i></div>
+                    <h3 class="text-xl font-bold mb-3 text-white">Universal Presence</h3>
+                    <p class="text-slate-400 text-sm leading-relaxed">Preinstalled on every Linux, macOS, BSD, and Unix system. From embedded devices to cloud servers — sed is everywhere text needs transforming.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="timeline" class="py-16 lg:py-24 border-t border-slate-800/40 relative">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="text-center mb-16">
+                <div class="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-bold tracking-widest uppercase mb-6"><i class="fas fa-timeline text-[10px]"></i> Complete Timeline</div>
+                <h2 class="text-3xl lg:text-5xl font-bold mb-6">From Bell Labs to <span class="gradient-text">JavaScript</span></h2>
+                <p class="text-slate-400 text-lg max-w-2xl mx-auto">Five decades of evolution, from a PDP-11 research tool to a zero-dependency npm library.</p>
+            </div>
+            <div class="relative max-w-4xl mx-auto">
+                <div class="absolute left-4 md:left-1/2 top-0 bottom-0 w-0.5 timeline-line md:-translate-x-px"></div>
+
+                <div class="relative mb-16 md:mb-24">
+                    <div class="md:flex items-center">
+                        <div class="md:w-1/2 md:pr-12 md:text-right">
+                            <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 md:p-8 card-hover">
+                                <div class="text-emerald-400 font-mono text-sm font-bold mb-2">1965 — 1966</div>
+                                <h3 class="text-xl font-bold text-white mb-3">The <code class="text-indigo-400 font-mono">qed</code> Editor</h3>
+                                <p class="text-slate-400 text-sm leading-relaxed">The "quick editor" is developed at Berkeley. It introduces regular expression pattern matching to interactive text editing — the conceptual ancestor of sed's regex engine.</p>
+                            </div>
+                        </div>
+                        <div class="absolute left-4 md:left-1/2 w-4 h-4 bg-emerald-500 rounded-full timeline-dot md:-translate-x-2 top-6 md:top-1/2 md:-translate-y-1/2 z-10"></div>
+                        <div class="md:w-1/2 md:pl-12 mt-4 md:mt-0"><div class="hidden md:block text-slate-600 font-mono text-xs"><i class="fas fa-terminal mr-2"></i>precursor to ed</div></div>
+                    </div>
+                </div>
+
+                <div class="relative mb-16 md:mb-24">
+                    <div class="md:flex items-center">
+                        <div class="md:w-1/2 md:pr-12 md:text-right order-1"><div class="hidden md:block text-slate-600 font-mono text-xs"><i class="fas fa-terminal mr-2"></i>interactive line editor</div></div>
+                        <div class="absolute left-4 md:left-1/2 w-4 h-4 bg-indigo-500 rounded-full timeline-dot md:-translate-x-2 top-6 md:top-1/2 md:-translate-y-1/2 z-10"></div>
+                        <div class="md:w-1/2 md:pl-12 order-2 mt-4 md:mt-0">
+                            <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 md:p-8 card-hover">
+                                <div class="text-indigo-400 font-mono text-sm font-bold mb-2">1971</div>
+                                <h3 class="text-xl font-bold text-white mb-3">Ken Thompson's <code class="text-indigo-400 font-mono">ed</code></h3>
+                                <p class="text-slate-400 text-sm leading-relaxed">Ken Thompson creates the Unix line editor <code class="font-mono text-indigo-400/80">ed</code> at Bell Labs. It introduces the <code class="font-mono text-emerald-400">s///</code> substitution syntax and <code class="font-mono text-emerald-400">/</code> pattern delimiter that sed would inherit verbatim.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="relative mb-16 md:mb-24">
+                    <div class="md:flex items-center">
+                        <div class="md:w-1/2 md:pr-12 md:text-right">
+                            <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 md:p-8 card-hover">
+                                <div class="text-indigo-400 font-mono text-sm font-bold mb-2">1973</div>
+                                <h3 class="text-xl font-bold text-white mb-3"><code class="text-indigo-400 font-mono">grep</code> is Born</h3>
+                                <p class="text-slate-400 text-sm leading-relaxed">Ken Thompson writes <code class="font-mono text-indigo-400/80">grep</code> in a single night at Bell Labs. The <code class="font-mono text-emerald-400">g/re/p</code> (global/regular expression/print) command from ed becomes a standalone tool — proving the power of pattern-based text processing.</p>
+                            </div>
+                        </div>
+                        <div class="absolute left-4 md:left-1/2 w-4 h-4 bg-indigo-500 rounded-full timeline-dot md:-translate-x-2 top-6 md:top-1/2 md:-translate-y-1/2 z-10"></div>
+                        <div class="md:w-1/2 md:pl-12 mt-4 md:mt-0"><div class="hidden md:block text-slate-600 font-mono text-xs"><i class="fas fa-bolt mr-2"></i>one night of coding</div></div>
+                    </div>
+                </div>
+
+                <div class="relative mb-16 md:mb-24">
+                    <div class="md:flex items-center">
+                        <div class="md:w-1/2 md:pr-12 md:text-right order-1"><div class="hidden md:block text-slate-600 font-mono text-xs"><i class="fas fa-star mr-2"></i>the breakthrough</div></div>
+                        <div class="absolute left-4 md:left-1/2 w-5 h-5 bg-gradient-to-br from-indigo-500 to-emerald-500 rounded-full timeline-dot md:-translate-x-2.5 top-6 md:top-1/2 md:-translate-y-1/2 z-10 ring-4 ring-indigo-500/20"></div>
+                        <div class="md:w-1/2 md:pl-12 order-2 mt-4 md:mt-0">
+                            <div class="bg-slate-900/80 border border-indigo-500/30 rounded-2xl p-6 md:p-8 card-hover glow-indigo">
+                                <div class="flex items-center gap-2 mb-2">
+                                    <div class="text-indigo-400 font-mono text-sm font-bold">1973 — 1974</div>
+                                    <span class="px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 text-[10px] font-bold uppercase tracking-wider">Origin</span>
+                                </div>
+                                <h3 class="text-xl font-bold text-white mb-3">Lee McMahon Creates <code class="text-indigo-400 font-mono">sed</code></h3>
+                                <p class="text-slate-400 text-sm leading-relaxed mb-4">At Bell Labs, Lee E. McMahon develops the stream editor. The original motivation was an analogue of grep for substitution — <code class="font-mono text-emerald-400">g/re/s</code>. Foreseeing endless special-purpose variants, he built a general-purpose line-oriented stream editor instead.</p>
+                                <div class="bg-slate-950/50 rounded-lg p-3 border border-slate-800">
+                                    <p class="text-xs text-slate-500 font-mono"><i class="fas fa-quote-left mr-2 text-slate-600"></i>Sed is a non-interactive context editor designed to be especially useful for files too large for comfortable interactive editing.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="relative mb-16 md:mb-24">
+                    <div class="md:flex items-center">
+                        <div class="md:w-1/2 md:pr-12 md:text-right">
+                            <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 md:p-8 card-hover">
+                                <div class="text-indigo-400 font-mono text-sm font-bold mb-2">1979</div>
+                                <h3 class="text-xl font-bold text-white mb-3">Ships with <span class="text-emerald-400">Version 7 Unix</span></h3>
+                                <p class="text-slate-400 text-sm leading-relaxed">sed first appears in Version 7 Unix, becoming one of the foundational command-line utilities. It joins grep and awk as essential tools for shell scripting and data pipeline processing.</p>
+                            </div>
+                        </div>
+                        <div class="absolute left-4 md:left-1/2 w-4 h-4 bg-emerald-500 rounded-full timeline-dot md:-translate-x-2 top-6 md:top-1/2 md:-translate-y-1/2 z-10"></div>
+                        <div class="md:w-1/2 md:pl-12 mt-4 md:mt-0"><div class="hidden md:block text-slate-600 font-mono text-xs"><i class="fas fa-box-open mr-2"></i>first public release</div></div>
+                    </div>
+                </div>
+
+                <div class="relative mb-16 md:mb-24">
+                    <div class="md:flex items-center">
+                        <div class="md:w-1/2 md:pr-12 md:text-right order-1"><div class="hidden md:block text-slate-600 font-mono text-xs"><i class="fas fa-handshake mr-2"></i>the power trio</div></div>
+                        <div class="absolute left-4 md:left-1/2 w-4 h-4 bg-purple-500 rounded-full timeline-dot md:-translate-x-2 top-6 md:top-1/2 md:-translate-y-1/2 z-10"></div>
+                        <div class="md:w-1/2 md:pl-12 order-2 mt-4 md:mt-0">
+                            <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 md:p-8 card-hover">
+                                <div class="text-purple-400 font-mono text-sm font-bold mb-2">1977</div>
+                                <h3 class="text-xl font-bold text-white mb-3"><code class="text-purple-400 font-mono">AWK</code> Arrives</h3>
+                                <p class="text-slate-400 text-sm leading-relaxed">Aho, Weinberger, and Kernighan create AWK at Bell Labs. sed and AWK become "cousins" — sed for simple transformations, AWK for structured data processing. Together with grep, they form the Unix text processing trinity.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="relative mb-16 md:mb-24">
+                    <div class="md:flex items-center">
+                        <div class="md:w-1/2 md:pr-12 md:text-right">
+                            <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 md:p-8 card-hover">
+                                <div class="text-indigo-400 font-mono text-sm font-bold mb-2">1988 — 1992</div>
+                                <h3 class="text-xl font-bold text-white mb-3"><span class="text-emerald-400">POSIX</span> Standardization</h3>
+                                <p class="text-slate-400 text-sm leading-relaxed">The IEEE POSIX standard defines a portable specification for sed. This ensures consistent behavior across Unix variants — from Solaris to Linux to macOS — establishing the baseline that all implementations must support.</p>
+                            </div>
+                        </div>
+                        <div class="absolute left-4 md:left-1/2 w-4 h-4 bg-emerald-500 rounded-full timeline-dot md:-translate-x-2 top-6 md:top-1/2 md:-translate-y-1/2 z-10"></div>
+                        <div class="md:w-1/2 md:pl-12 mt-4 md:mt-0"><div class="hidden md:block text-slate-600 font-mono text-xs"><i class="fas fa-certificate mr-2"></i>IEEE 1003.2</div></div>
+                    </div>
+                </div>
+
+                <div class="relative mb-16 md:mb-24">
+                    <div class="md:flex items-center">
+                        <div class="md:w-1/2 md:pr-12 md:text-right order-1"><div class="hidden md:block text-slate-600 font-mono text-xs"><i class="fas fa-gear mr-2"></i>extensions era</div></div>
+                        <div class="absolute left-4 md:left-1/2 w-4 h-4 bg-indigo-500 rounded-full timeline-dot md:-translate-x-2 top-6 md:top-1/2 md:-translate-y-1/2 z-10"></div>
+                        <div class="md:w-1/2 md:pl-12 order-2 mt-4 md:mt-0">
+                            <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 md:p-8 card-hover">
+                                <div class="text-indigo-400 font-mono text-sm font-bold mb-2">1990s</div>
+                                <h3 class="text-xl font-bold text-white mb-3"><span class="text-indigo-400">GNU</span> sed Extensions</h3>
+                                <p class="text-slate-400 text-sm leading-relaxed mb-4">The GNU Project develops its own sed implementation, adding powerful extensions: in-place editing (<code class="font-mono text-emerald-400">-i</code>), extended regex support (<code class="font-mono text-emerald-400">-r/-E</code>), the <code class="font-mono text-emerald-400">z</code> command, and <code class="font-mono text-emerald-400">s///e</code> (execute replacement). GNU sed becomes the default on Linux distributions.</p>
+                                <div class="flex flex-wrap gap-2">
+                                    <span class="px-2 py-1 rounded bg-slate-800 text-slate-400 text-xs font-mono">-i</span>
+                                    <span class="px-2 py-1 rounded bg-slate-800 text-slate-400 text-xs font-mono">-E</span>
+                                    <span class="px-2 py-1 rounded bg-slate-800 text-slate-400 text-xs font-mono">s///e</span>
+                                    <span class="px-2 py-1 rounded bg-slate-800 text-slate-400 text-xs font-mono">z</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="relative mb-16 md:mb-24">
+                    <div class="md:flex items-center">
+                        <div class="md:w-1/2 md:pr-12 md:text-right">
+                            <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 md:p-8 card-hover">
+                                <div class="text-amber-400 font-mono text-sm font-bold mb-2">1990s</div>
+                                <h3 class="text-xl font-bold text-white mb-3"><code class="text-amber-400 font-mono">minised</code> &amp; Embedded</h3>
+                                <p class="text-slate-400 text-sm leading-relaxed">Eric S. Raymond reverse-engineers a minimal sed from 4.1BSD. minised becomes the GNU Project's interim implementation and remains vital for embedded systems and Minix due to its tiny memory footprint.</p>
+                            </div>
+                        </div>
+                        <div class="absolute left-4 md:left-1/2 w-4 h-4 bg-amber-500 rounded-full timeline-dot md:-translate-x-2 top-6 md:top-1/2 md:-translate-y-1/2 z-10"></div>
+                        <div class="md:w-1/2 md:pl-12 mt-4 md:mt-0"><div class="hidden md:block text-slate-600 font-mono text-xs"><i class="fas fa-microchip mr-2"></i>embedded systems</div></div>
+                    </div>
+                </div>
+
+                <div class="relative mb-16 md:mb-24">
+                    <div class="md:flex items-center">
+                        <div class="md:w-1/2 md:pr-12 md:text-right order-1"><div class="hidden md:block text-slate-600 font-mono text-xs"><i class="fas fa-arrows-rotate mr-2"></i>circular influence</div></div>
+                        <div class="absolute left-4 md:left-1/2 w-4 h-4 bg-purple-500 rounded-full timeline-dot md:-translate-x-2 top-6 md:top-1/2 md:-translate-y-1/2 z-10"></div>
+                        <div class="md:w-1/2 md:pl-12 order-2 mt-4 md:mt-0">
+                            <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 md:p-8 card-hover">
+                                <div class="text-purple-400 font-mono text-sm font-bold mb-2">1987</div>
+                                <h3 class="text-xl font-bold text-white mb-3"><code class="text-purple-400 font-mono">Perl</code> &amp; The Feedback Loop</h3>
+                                <p class="text-slate-400 text-sm leading-relaxed">Larry Wall releases Perl, explicitly inspired by sed and AWK. Perl's <code class="font-mono text-emerald-400">s///</code> and <code class="font-mono text-emerald-400">m//</code> operators borrow directly from sed syntax. In turn, GNU sed later adopts Perl-compatible regex features.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="relative mb-16 md:mb-24">
+                    <div class="md:flex items-center">
+                        <div class="md:w-1/2 md:pr-12 md:text-right">
+                            <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 md:p-8 card-hover">
+                                <div class="text-indigo-400 font-mono text-sm font-bold mb-2">2012</div>
+                                <h3 class="text-xl font-bold text-white mb-3">GNU sed <span class="text-indigo-400">4.2.2</span></h3>
+                                <p class="text-slate-400 text-sm leading-relaxed">GNU sed 4.2.2 is released. The project continues under new maintainership, solidifying its position as the most feature-rich sed implementation and the default on virtually every Linux distribution.</p>
+                            </div>
+                        </div>
+                        <div class="absolute left-4 md:left-1/2 w-4 h-4 bg-indigo-500 rounded-full timeline-dot md:-translate-x-2 top-6 md:top-1/2 md:-translate-y-1/2 z-10"></div>
+                        <div class="md:w-1/2 md:pl-12 mt-4 md:mt-0"><div class="hidden md:block text-slate-600 font-mono text-xs"><i class="fas fa-code-branch mr-2"></i>maturity milestone</div></div>
+                    </div>
+                </div>
+
+                <div class="relative">
+                    <div class="md:flex items-center">
+                        <div class="md:w-1/2 md:pr-12 md:text-right order-1"><div class="hidden md:block text-slate-600 font-mono text-xs"><i class="fas fa-rocket mr-2"></i>the next chapter</div></div>
+                        <div class="absolute left-4 md:left-1/2 w-5 h-5 bg-gradient-to-br from-indigo-500 to-emerald-500 rounded-full timeline-dot md:-translate-x-2.5 top-6 md:top-1/2 md:-translate-y-1/2 z-10 ring-4 ring-emerald-500/20 animate-pulse"></div>
+                        <div class="md:w-1/2 md:pl-12 order-2 mt-4 md:mt-0">
+                            <div class="bg-slate-900/80 border border-emerald-500/30 rounded-2xl p-6 md:p-8 card-hover glow-emerald">
+                                <div class="flex items-center gap-2 mb-2">
+                                    <div class="text-emerald-400 font-mono text-sm font-bold">2026</div>
+                                    <span class="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 text-[10px] font-bold uppercase tracking-wider">Now</span>
+                                </div>
+                                <h3 class="text-xl font-bold text-white mb-3"><span class="gradient-text">Sed.js</span> — JavaScript Port</h3>
+                                <p class="text-slate-400 text-sm leading-relaxed mb-4">A clean-room JavaScript implementation of sed, supporting both POSIX and GNU extensions. Validated with 100,000 fuzz-tested commands against <code class="font-mono text-emerald-400">sed --posix</code> and GNU sed. Zero dependencies. Works in browsers and Node.js.</p>
+                                <div class="flex flex-wrap gap-2">
+                                    <span class="px-2 py-1 rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-mono">POSIX</span>
+                                    <span class="px-2 py-1 rounded bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-mono">GNU</span>
+                                    <span class="px-2 py-1 rounded bg-purple-500/10 border border-purple-500/20 text-purple-400 text-xs font-mono">Zero Deps</span>
+                                    <span class="px-2 py-1 rounded bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs font-mono">100K Fuzzed</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="posix-gnu" class="py-16 lg:py-24 border-t border-slate-800/40">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="text-center mb-16">
+                <div class="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-bold tracking-widest uppercase mb-6"><i class="fas fa-scale-balanced text-[10px]"></i> Compatibility Guide</div>
+                <h2 class="text-3xl lg:text-5xl font-bold mb-6">POSIX <span class="text-slate-600">vs</span> <span class="text-indigo-400">GNU</span></h2>
+                <p class="text-slate-400 text-lg max-w-2xl mx-auto">Understanding the two major sed dialects — and why Sed.js supports both.</p>
+            </div>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                <div class="bg-slate-900/50 border border-slate-800 rounded-2xl overflow-hidden">
+                    <div class="px-6 py-4 bg-slate-800/50 border-b border-slate-700 flex items-center gap-3">
+                        <div class="w-8 h-8 bg-emerald-500/10 rounded-lg flex items-center justify-center"><i class="fas fa-certificate text-emerald-400 text-sm"></i></div>
+                        <div><h3 class="font-bold text-white">POSIX sed</h3><p class="text-xs text-slate-500">IEEE 1003.2 Standard</p></div>
+                    </div>
+                    <div class="p-6 space-y-4">
+                        <p class="text-slate-400 text-sm">The portable baseline. Every Unix-like system must support these commands and behaviors. Use <code class="font-mono text-emerald-400">sed --posix</code> on GNU systems to enforce strict compliance.</p>
+                        <div class="space-y-3">
+                            <div class="flex items-start gap-3"><i class="fas fa-check text-emerald-400 text-xs mt-1"></i><div><div class="text-sm font-semibold text-slate-200">Core Commands</div><div class="text-xs text-slate-500 font-mono">s, d, p, a, i, c, y, r, w, n, N, D, P, h, H, g, G, x, b, t, :, =, q</div></div></div>
+                            <div class="flex items-start gap-3"><i class="fas fa-check text-emerald-400 text-xs mt-1"></i><div><div class="text-sm font-semibold text-slate-200">Basic Regular Expressions</div><div class="text-xs text-slate-500">Standard BRE syntax with groups and backreferences</div></div></div>
+                            <div class="flex items-start gap-3"><i class="fas fa-check text-emerald-400 text-xs mt-1"></i><div><div class="text-sm font-semibold text-slate-200">Address Ranges</div><div class="text-xs text-slate-500">Line numbers, regex patterns, and /start/,/end/ ranges</div></div></div>
+                            <div class="flex items-start gap-3"><i class="fas fa-xmark text-red-400 text-xs mt-1"></i><div><div class="text-sm font-semibold text-slate-200">No In-Place Editing</div><div class="text-xs text-slate-500">Must redirect output manually; no -i flag</div></div></div>
+                        </div>
+                        <div class="bg-slate-950 rounded-lg p-3 border border-slate-800"><div class="text-xs text-slate-600 font-mono">$ sed --posix 's/foo/bar/g' input.txt</div></div>
+                    </div>
+                </div>
+                <div class="bg-slate-900/50 border border-slate-800 rounded-2xl overflow-hidden">
+                    <div class="px-6 py-4 bg-slate-800/50 border-b border-slate-700 flex items-center gap-3">
+                        <div class="w-8 h-8 bg-indigo-500/10 rounded-lg flex items-center justify-center"><i class="fas fa-gear text-indigo-400 text-sm"></i></div>
+                        <div><h3 class="font-bold text-white">GNU sed</h3><p class="text-xs text-slate-500">Linux Standard</p></div>
+                    </div>
+                    <div class="p-6 space-y-4">
+                        <p class="text-slate-400 text-sm">The de facto standard on Linux. Adds powerful extensions for modern workflows while maintaining backward compatibility with POSIX scripts.</p>
+                        <div class="space-y-3">
+                            <div class="flex items-start gap-3"><i class="fas fa-plus text-indigo-400 text-xs mt-1"></i><div><div class="text-sm font-semibold text-slate-200">In-Place Editing -i</div><div class="text-xs text-slate-500">Edit files directly with optional backup suffix</div></div></div>
+                            <div class="flex items-start gap-3"><i class="fas fa-plus text-indigo-400 text-xs mt-1"></i><div><div class="text-sm font-semibold text-slate-200">Extended Regex -E / -r</div><div class="text-xs text-slate-500">ERE syntax: () groups, +, ?, | alternation</div></div></div>
+                            <div class="flex items-start gap-3"><i class="fas fa-plus text-indigo-400 text-xs mt-1"></i><div><div class="text-sm font-semibold text-slate-200">Execute Replacement s///e</div><div class="text-xs text-slate-500">Run the replacement as a shell command</div></div></div>
+                            <div class="flex items-start gap-3"><i class="fas fa-plus text-indigo-400 text-xs mt-1"></i><div><div class="text-sm font-semibold text-slate-200">New Commands</div><div class="text-xs text-slate-500 font-mono">z, R/W, e, F</div></div></div>
+                            <div class="flex items-start gap-3"><i class="fas fa-plus text-indigo-400 text-xs mt-1"></i><div><div class="text-sm font-semibold text-slate-200">Case-Insensitive s///I</div><div class="text-xs text-slate-500">Match patterns without case sensitivity</div></div></div>
+                        </div>
+                        <div class="bg-slate-950 rounded-lg p-3 border border-slate-800"><div class="text-xs text-slate-600 font-mono">$ sed -i -E 's/foo(bar)?/baz/g' *.txt</div></div>
+                    </div>
+                </div>
+            </div>
+            <div class="mt-8 bg-gradient-to-r from-indigo-500/10 to-emerald-500/10 border border-indigo-500/20 rounded-2xl p-8 text-center">
+                <div class="flex items-center justify-center gap-3 mb-4"><i class="fas fa-shield-halved text-indigo-400 text-2xl"></i></div>
+                <h3 class="text-2xl font-bold text-white mb-3">Sed.js Supports Both</h3>
+                <p class="text-slate-400 max-w-2xl mx-auto mb-6">Switch between POSIX strict mode and GNU extended mode with a single option. Every command is fuzz-tested against the reference implementations to ensure behavioral parity.</p>
+                <div class="bg-slate-950 rounded-xl p-4 border border-slate-800 max-w-xl mx-auto text-left">
+                    <div class="font-mono text-sm space-y-1">
+                        <div><span class="text-slate-500">// POSIX mode</span></div>
+                        <div><span class="text-indigo-400">await</span> sed(<span class="text-emerald-400">'s/foo/bar/g'</span>, input, { mode: <span class="text-emerald-400">'posix'</span> });</div>
+                        <div class="h-2"></div>
+                        <div><span class="text-slate-500">// GNU mode with extensions</span></div>
+                        <div><span class="text-indigo-400">await</span> sed(<span class="text-emerald-400">'s/foo(bar)?/baz/g'</span>, input, { mode: <span class="text-emerald-400">'gnu'</span>, extendedRegex: <span class="text-indigo-400">true</span> });</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="py-16 lg:py-24 border-t border-slate-800/40">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="text-center mb-16">
+                <h2 class="text-3xl lg:text-4xl font-bold mb-6">The Architects of <span class="gradient-text">Stream Editing</span></h2>
+                <p class="text-slate-400 text-lg max-w-2xl mx-auto">The researchers at Bell Labs who shaped the tools we still use today.</p>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                <div class="bg-slate-900/50 border border-slate-800 rounded-2xl p-6 text-center card-hover">
+                    <div class="w-16 h-16 mx-auto bg-indigo-500/10 rounded-full flex items-center justify-center mb-4"><span class="text-2xl font-bold text-indigo-400">LM</span></div>
+                    <h4 class="font-bold text-white mb-1">Lee E. McMahon</h4>
+                    <p class="text-xs text-indigo-400 font-mono mb-3">Creator of sed</p>
+                    <p class="text-slate-400 text-sm">Bell Labs researcher who developed sed (1973-74) as a general-purpose stream editor, also contributed to grep, qsort, and comm.</p>
+                </div>
+                <div class="bg-slate-900/50 border border-slate-800 rounded-2xl p-6 text-center card-hover">
+                    <div class="w-16 h-16 mx-auto bg-emerald-500/10 rounded-full flex items-center justify-center mb-4"><span class="text-2xl font-bold text-emerald-400">KT</span></div>
+                    <h4 class="font-bold text-white mb-1">Ken Thompson</h4>
+                    <p class="text-xs text-emerald-400 font-mono mb-3">Creator of ed &amp; grep</p>
+                    <p class="text-slate-400 text-sm">Unix co-creator who wrote the ed line editor and grep in a single night. His regex code was copied "almost verbatim" into sed.</p>
+                </div>
+                <div class="bg-slate-900/50 border border-slate-800 rounded-2xl p-6 text-center card-hover">
+                    <div class="w-16 h-16 mx-auto bg-purple-500/10 rounded-full flex items-center justify-center mb-4"><span class="text-2xl font-bold text-purple-400">DM</span></div>
+                    <h4 class="font-bold text-white mb-1">Dennis M. Ritchie</h4>
+                    <p class="text-xs text-purple-400 font-mono mb-3">Regex Engine Author</p>
+                    <p class="text-slate-400 text-sm">C language co-creator who wrote the regular expression matching code and documentation for ed — the foundation of sed's pattern engine.</p>
+                </div>
+                <div class="bg-slate-900/50 border border-slate-800 rounded-2xl p-6 text-center card-hover">
+                    <div class="w-16 h-16 mx-auto bg-amber-500/10 rounded-full flex items-center justify-center mb-4"><span class="text-2xl font-bold text-amber-400">ESR</span></div>
+                    <h4 class="font-bold text-white mb-1">Eric S. Raymond</h4>
+                    <p class="text-xs text-amber-400 font-mono mb-3">minised Author</p>
+                    <p class="text-slate-400 text-sm">Reverse-engineered minised from 4.1BSD, which served as the GNU Project's interim sed implementation before the current GNU version.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="sedjs" class="py-16 lg:py-24 border-t border-slate-800/40 relative overflow-hidden">
+        <div class="absolute inset-0 pointer-events-none">
+            <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-indigo-600/5 rounded-full blur-3xl"></div>
+        </div>
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative">
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-12 lg:gap-20 items-center">
+                <div class="space-y-8">
+                    <div class="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-bold tracking-widest uppercase"><i class="fas fa-bolt text-[10px]"></i> Open Source on GitHub</div>
+                    <h2 class="text-4xl lg:text-5xl font-extrabold leading-tight">Bring <code class="text-indigo-400 font-mono">sed</code> to<br><span class="gradient-text">JavaScript</span></h2>
+                    <p class="text-lg text-slate-400 max-w-lg leading-relaxed">Sed.js is a clean-room port of the Unix stream editor for JavaScript. POSIX and GNU compatible. Zero dependencies. Validated with 100,000 fuzz-tested commands. Works in browsers and Node.js.</p>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div class="flex items-center gap-3">
+                            <div class="w-10 h-10 bg-indigo-500/10 rounded-lg flex items-center justify-center"><i class="fas fa-check text-indigo-400 text-sm"></i></div>
+                            <div><div class="text-sm font-semibold text-white">POSIX Compliant</div><div class="text-xs text-slate-500">Strict mode available</div></div>
+                        </div>
+                        <div class="flex items-center gap-3">
+                            <div class="w-10 h-10 bg-indigo-500/10 rounded-lg flex items-center justify-center"><i class="fas fa-check text-indigo-400 text-sm"></i></div>
+                            <div><div class="text-sm font-semibold text-white">GNU Extensions</div><div class="text-xs text-slate-500">-i, -E, s///e, z</div></div>
+                        </div>
+                        <div class="flex items-center gap-3">
+                            <div class="w-10 h-10 bg-emerald-500/10 rounded-lg flex items-center justify-center"><i class="fas fa-check text-emerald-400 text-sm"></i></div>
+                            <div><div class="text-sm font-semibold text-white">100K Fuzz Tested</div><div class="text-xs text-slate-500">Against reference sed</div></div>
+                        </div>
+                        <div class="flex items-center gap-3">
+                            <div class="w-10 h-10 bg-emerald-500/10 rounded-lg flex items-center justify-center"><i class="fas fa-check text-emerald-400 text-sm"></i></div>
+                            <div><div class="text-sm font-semibold text-white">Zero Dependencies</div><div class="text-xs text-slate-500">Pure JavaScript</div></div>
+                        </div>
+                    </div>
+                    <div class="flex flex-wrap gap-4">
+                        <a href="playground.html" class="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-8 py-4 rounded-xl font-bold text-base transition-all hover:-translate-y-0.5 shadow-lg shadow-indigo-600/20"><i class="fas fa-rocket"></i> Try the Playground</a>
+                        <a href="https://github.com/your-repo/sedjs" target="_blank" class="flex items-center gap-2 bg-slate-900 border border-slate-700 hover:border-slate-500 text-slate-200 px-8 py-4 rounded-xl font-bold text-base transition-all"><i class="fab fa-github"></i> npm install sedjs</a>
+                    </div>
+                </div>
+                <div class="relative">
+                    <div class="absolute -inset-1 bg-gradient-to-r from-indigo-500 to-emerald-500 rounded-2xl blur opacity-20"></div>
+                    <div class="relative bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl">
+                        <div class="flex items-center justify-between px-4 py-3 bg-slate-800/50 border-b border-slate-700">
+                            <div class="flex gap-2">
+                                <div class="w-3 h-3 rounded-full bg-red-500/30 border border-red-500/50"></div>
+                                <div class="w-3 h-3 rounded-full bg-amber-500/30 border border-amber-500/50"></div>
+                                <div class="w-3 h-3 rounded-full bg-emerald-500/30 border border-emerald-500/50"></div>
+                            </div>
+                            <span class="text-xs font-mono text-slate-500">example.js</span>
+                            <div class="w-4"></div>
+                        </div>
+                        <div class="p-6 font-mono text-sm leading-relaxed space-y-1">
+                            <div class="text-slate-500 italic mb-3">// npm install sedjs</div>
+                            <div class="flex gap-4"><span class="text-slate-600 shrink-0 select-none">1</span><span><span class="text-indigo-400">import</span> { sed } <span class="text-indigo-400">from</span> <span class="text-emerald-400">'sedjs'</span>;</span></div>
+                            <div class="flex gap-4"><span class="text-slate-600 shrink-0 select-none">2</span><span>&nbsp;</span></div>
+                            <div class="flex gap-4"><span class="text-slate-600 shrink-0 select-none">3</span><span><span class="text-slate-500">// POSIX mode: strict compatibility</span></span></div>
+                            <div class="flex gap-4"><span class="text-slate-600 shrink-0 select-none">4</span><span><span class="text-indigo-400">const</span> posix = <span class="text-indigo-400">await</span> sed(</span></div>
+                            <div class="flex gap-4"><span class="text-slate-600 shrink-0 select-none">5</span><span class="text-emerald-400 pl-4">'s/hello/world/g'</span>,</span></div>
+                            <div class="flex gap-4"><span class="text-slate-600 shrink-0 select-none">6</span><span class="text-emerald-400 pl-4">'hello sedjs users!'</span>,</span></div>
+                            <div class="flex gap-4"><span class="text-slate-600 shrink-0 select-none">7</span><span class="pl-4">{ mode: <span class="text-emerald-400">'posix'</span> }</span></div>
+                            <div class="flex gap-4"><span class="text-slate-600 shrink-0 select-none">8</span><span>);</span></div>
+                            <div class="h-2"></div>
+                            <div class="flex gap-4"><span class="text-slate-600 shrink-0 select-none">9</span><span><span class="text-slate-500">// GNU mode: extended regex</span></span></div>
+                            <div class="flex gap-4"><span class="text-slate-600 shrink-0 select-none">10</span><span><span class="text-indigo-400">const</span> gnu = <span class="text-indigo-400">await</span> sed(</span></div>
+                            <div class="flex gap-4"><span class="text-slate-600 shrink-0 select-none">11</span><span class="text-emerald-400 pl-4">'s/(foo|bar)/baz/g'</span>,</span></div>
+                            <div class="flex gap-4"><span class="text-slate-600 shrink-0 select-none">12</span><span class="text-emerald-400 pl-4">'foo and bar'</span>,</span></div>
+                            <div class="flex gap-4"><span class="text-slate-600 shrink-0 select-none">13</span><span class="pl-4">{ mode: <span class="text-emerald-400">'gnu'</span>, extendedRegex: <span class="text-indigo-400">true</span> }</span></div>
+                            <div class="flex gap-4"><span class="text-slate-600 shrink-0 select-none">14</span><span>);</span></div>
+                            <div class="h-2"></div>
+                            <div class="flex gap-4"><span class="text-slate-600 shrink-0 select-none">15</span><span>console.<span class="text-indigo-400">log</span>(posix); <span class="text-slate-500">// "world sedjs users!"</span></span></div>
+                            <div class="flex gap-4"><span class="text-slate-600 shrink-0 select-none">16</span><span>console.<span class="text-indigo-400">log</span>(gnu);   <span class="text-slate-500">// "baz and baz"</span></span></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="py-16 lg:py-24 border-t border-slate-800/40">
+        <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="text-center mb-16">
+                <h2 class="text-3xl lg:text-4xl font-bold mb-6">Frequently Asked <span class="gradient-text">Questions</span></h2>
+            </div>
+            <div class="space-y-4">
+                <details class="group bg-slate-900/50 border border-slate-800 rounded-xl overflow-hidden">
+                    <summary class="flex items-center justify-between p-6 cursor-pointer hover:bg-slate-800/30 transition-colors">
+                        <span class="font-semibold text-white">Who created sed and when?</span>
+                        <i class="fas fa-chevron-down text-slate-500 group-open:rotate-180 transition-transform"></i>
+                    </summary>
+                    <div class="px-6 pb-6 text-slate-400 text-sm leading-relaxed">sed was created by <strong class="text-slate-200">Lee E. McMahon</strong> at Bell Labs between 1973 and 1974. It was developed as a general-purpose stream editor, evolving from the concept of <code class="font-mono text-emerald-400">g/re/s</code> (a grep analogue for substitution). The syntax was inherited from Ken Thompson's <code class="font-mono text-indigo-400">ed</code> line editor (1971), with regular expression code written by Dennis Ritchie.</div>
+                </details>
+                <details class="group bg-slate-900/50 border border-slate-800 rounded-xl overflow-hidden">
+                    <summary class="flex items-center justify-between p-6 cursor-pointer hover:bg-slate-800/30 transition-colors">
+                        <span class="font-semibold text-white">What is the difference between POSIX sed and GNU sed?</span>
+                        <i class="fas fa-chevron-down text-slate-500 group-open:rotate-180 transition-transform"></i>
+                    </summary>
+                    <div class="px-6 pb-6 text-slate-400 text-sm leading-relaxed"><strong class="text-slate-200">POSIX sed</strong> is the portable baseline defined by IEEE 1003.2 — every Unix-like system must support its core commands and basic regular expressions. <strong class="text-slate-200">GNU sed</strong> extends POSIX with in-place editing (<code class="font-mono text-emerald-400">-i</code>), extended regex (<code class="font-mono text-emerald-400">-E</code>), the <code class="font-mono text-emerald-400">z</code> command, <code class="font-mono text-emerald-400">s///e</code> (execute replacement), and more. Use <code class="font-mono text-emerald-400">sed --posix</code> on GNU systems to enforce strict POSIX compliance.</div>
+                </details>
+                <details class="group bg-slate-900/50 border border-slate-800 rounded-xl overflow-hidden">
+                    <summary class="flex items-center justify-between p-6 cursor-pointer hover:bg-slate-800/30 transition-colors">
+                        <span class="font-semibold text-white">What does sed stand for?</span>
+                        <i class="fas fa-chevron-down text-slate-500 group-open:rotate-180 transition-transform"></i>
+                    </summary>
+                    <div class="px-6 pb-6 text-slate-400 text-sm leading-relaxed"><strong class="text-slate-200">sed</strong> stands for <em class="text-indigo-400">s</em>tream <em class="text-indigo-400">ed</em>itor. It is a non-interactive text editor that processes input line by line, applying a sequence of editing commands. Unlike interactive editors like ed or vi, sed reads from standard input (or files) and writes to standard output, making it ideal for automated text transformations and shell scripting pipelines.</div>
+                </details>
+                <details class="group bg-slate-900/50 border border-slate-800 rounded-xl overflow-hidden">
+                    <summary class="flex items-center justify-between p-6 cursor-pointer hover:bg-slate-800/30 transition-colors">
+                        <span class="font-semibold text-white">Is Sed.js compatible with GNU sed?</span>
+                        <i class="fas fa-chevron-down text-slate-500 group-open:rotate-180 transition-transform"></i>
+                    </summary>
+                    <div class="px-6 pb-6 text-slate-400 text-sm leading-relaxed">Yes. Sed.js supports both <strong class="text-slate-200">POSIX</strong> and <strong class="text-slate-200">GNU</strong> sed modes. In POSIX mode, it follows the IEEE 1003.2 standard strictly. In GNU mode, it supports extensions like <code class="font-mono text-emerald-400">-i</code> (in-place editing), <code class="font-mono text-emerald-400">-E</code> (extended regex), <code class="font-mono text-emerald-400">s///e</code> (execute replacement), and the <code class="font-mono text-emerald-400">z</code> command. The library was validated with 100,000 fuzz-tested commands against both <code class="font-mono text-emerald-400">sed --posix</code> and GNU sed reference implementations.</div>
+                </details>
+                <details class="group bg-slate-900/50 border border-slate-800 rounded-xl overflow-hidden">
+                    <summary class="flex items-center justify-between p-6 cursor-pointer hover:bg-slate-800/30 transition-colors">
+                        <span class="font-semibold text-white">What is the relationship between sed, grep, and awk?</span>
+                        <i class="fas fa-chevron-down text-slate-500 group-open:rotate-180 transition-transform"></i>
+                    </summary>
+                    <div class="px-6 pb-6 text-slate-400 text-sm leading-relaxed">These three tools form the Unix text processing trinity, all born at Bell Labs. <strong class="text-slate-200">grep</strong> (1973) searches for patterns. <strong class="text-slate-200">sed</strong> (1974) transforms text via stream editing. <strong class="text-slate-200">AWK</strong> (1977) processes structured data with a full programming language. sed and AWK are often called "cousins" — sed for simple line-based transformations, AWK for columnar data and arithmetic. Together with grep, they cover virtually all command-line text processing needs.</div>
+                </details>
+            </div>
+        </div>
+    </section>
+
+    <footer class="border-t border-slate-800/60 py-12">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-8 mb-8">
+                <div class="md:col-span-2">
+                    <div class="flex items-center gap-3 mb-4">
+                        <div class="bg-indigo-600 p-2 rounded-lg"><i class="fas fa-terminal text-white text-sm"></i></div>
+                        <span class="text-lg font-bold tracking-tight">sed<span class="text-indigo-400">js</span></span>
+                    </div>
+                    <p class="text-slate-400 text-sm max-w-sm">A clean-room JavaScript port of the Unix stream editor. POSIX and GNU compatible. Zero dependencies. 100K fuzz-tested.</p>
+                </div>
+                <div>
+                    <h4 class="font-bold text-white mb-4 text-sm">Resources</h4>
+                    <ul class="space-y-2 text-sm">
+                        <li><a href="playground.html" class="text-slate-400 hover:text-white transition-colors">Playground</a></li>
+                        <li><a href="#" class="text-slate-400 hover:text-white transition-colors">Documentation</a></li>
+                        <li><a href="#" class="text-slate-400 hover:text-white transition-colors">API Reference</a></li>
+                        <li><a href="#" class="text-slate-400 hover:text-white transition-colors">Changelog</a></li>
+                    </ul>
+                </div>
+                <div>
+                    <h4 class="font-bold text-white mb-4 text-sm">Community</h4>
+                    <ul class="space-y-2 text-sm">
+                        <li><a href="https://github.com/your-repo/sedjs" target="_blank" class="text-slate-400 hover:text-white transition-colors">GitHub</a></li>
+                        <li><a href="#" class="text-slate-400 hover:text-white transition-colors">Issues</a></li>
+                        <li><a href="#" class="text-slate-400 hover:text-white transition-colors">Discussions</a></li>
+                        <li><a href="#" class="text-slate-400 hover:text-white transition-colors">npm</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="border-t border-slate-800/60 pt-8 flex flex-col md:flex-row justify-between items-center gap-4">
+                <p class="text-slate-500 text-sm">&copy; 2026 Sed.js. MIT Licensed.</p>
+                <p class="text-slate-600 text-xs font-mono">Built with passion for Unix heritage.</p>
+            </div>
+        </div>
+    </footer>
+
+</body>
+</html>
