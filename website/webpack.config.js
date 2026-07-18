@@ -16,7 +16,7 @@ module.exports = (env, argv) => {
   };
 
   const htmlPages =[
-    { template: 'pages/index.html', filename: 'index.html', entry: 'main' },
+    { template: 'pages/index.html', filename: 'index.html', entry: 'index' },
     { template: 'pages/playground.html', filename: 'playground.html', entry: 'playground' },
     { template: 'pages/history-of-sed.html', filename: 'history-of-sed.html', entry: 'history-of-sed' },
   ];
