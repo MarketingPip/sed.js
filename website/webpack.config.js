@@ -11,6 +11,7 @@ module.exports = (env, argv) => {
   const entries = {
     index: path.resolve(__dirname, 'js/main.js'),
     playground: path.resolve(__dirname, 'js/playground.js'),
+    'history-of-sed': path.resolve(__dirname, 'js/history-of-sed.js'), 
     // 1. Give FontAwesome its own entry so Webpack creates a standalone CSS file for it
     fontawesome: '@fortawesome/fontawesome-free/css/all.min.css'
   };
