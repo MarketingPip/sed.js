@@ -27,6 +27,153 @@ function vfsSet(vfs, key, value) {
   Object.defineProperty(vfs, key, { value, writable: true, enumerable: true, configurable: true });
 }
 
+// ==========================================
+// FS Adapter
+// ==========================================
+//
+// Normalizes several backend "shapes" behind one async interface so the
+// rest of the engine never has to branch on what was passed in:
+//
+//   - a plain object, e.g. { "file.txt": "contents" }        (today's `vfs`)
+//   - an fs/promises-style module: { readFile, writeFile, ... } returning
+//     Promises (covers require('fs/promises'), memfs's `fs.promises`,
+//     a Volume's `.promises`, or any custom async shim with that shape)
+//   - a Node-`fs`-module-like object with a nested `.promises` (covers
+//     require('fs') itself, and memfs's default `fs` export)
+//   - a sync-only fs-like object: { readFileSync, writeFileSync, ... }
+//     (covers a bare memfs Volume instance, or a custom sync shim)
+//
+// `options.fs` is the preferred option key; `options.vfs` is kept as a
+// permanent alias for backward compatibility (both, if somehow both
+// given, `fs` wins).
+
+function detectFsAdapterKind(fsOption) {
+  if (fsOption == null) return "json";
+  if (fsOption.promises && typeof fsOption.promises.readFile === "function" && typeof fsOption.promises.writeFile === "function") {
+    return "node-like"; // require('fs'), memfs's `fs` export
+  }
+  if (typeof fsOption.readFile === "function" && typeof fsOption.writeFile === "function") {
+    return "promises"; // require('fs/promises'), memfs's fs.promises, Volume#promises
+  }
+  if (typeof fsOption.readFileSync === "function" && typeof fsOption.writeFileSync === "function") {
+    return "sync"; // a bare memfs Volume, or a custom sync-only shim
+  }
+  return "json";
+}
+
+// Creates a normalized async adapter. Every method returns a Promise
+// regardless of backend kind, so callers just `await` uniformly.
+function createFsAdapter(options) {
+  const provided = options.fs !== undefined ? options.fs : options.vfs;
+  const onEvent = typeof options.onFsEvent === "function" ? options.onFsEvent : null;
+  const mutate = options.mutateVfs !== false; // default true: preserves the historical `vfs` mutation behavior
+  const kind = detectFsAdapterKind(provided);
+
+  function emit(type, filename, extra) {
+    if (!onEvent) return;
+    try { onEvent({ type, filename, ...extra }); } catch { /* a listener's own error must never break sed */ }
+  }
+
+  if (kind === "json") {
+    let store = provided || {};
+    if (!mutate) {
+      // Clone into a fresh object rather than touching the caller's
+      // object, so writes made during this run never leak back into
+      // whatever object they passed in. vfsSet is used for the copy too,
+      // so the clone is exactly as prototype-pollution-safe as the source.
+      const clone = {};
+      if (provided) {
+        for (const key of Object.keys(provided)) {
+          if (Object.prototype.hasOwnProperty.call(provided, key)) vfsSet(clone, key, provided[key]);
+        }
+      }
+      store = clone;
+    }
+    return {
+      kind: "json",
+      supportsSnapshot: true,
+      async has(name) {
+        const r = vfsHas(store, name);
+        if (!r) emit("missing", name);
+        return r;
+      },
+      async get(name) {
+        const r = vfsGet(store, name);
+        emit("read", name, { found: r !== undefined });
+        return r;
+      },
+      async set(name, value) {
+        vfsSet(store, name, value);
+        emit("write", name, { size: value.length });
+      },
+      async snapshot() {
+        const out = {};
+        for (const key of Object.keys(store)) {
+          if (Object.prototype.hasOwnProperty.call(store, key)) out[key] = store[key];
+        }
+        return out;
+      },
+    };
+  }
+
+  // Real-fs-like backends: filenames are passed straight through to the
+  // underlying implementation, exactly as a shell would hand sed a path.
+  // Relative-path resolution is the backend's own responsibility (Node's
+  // fs and memfs both resolve relative to process.cwd() the same way).
+  const readFile = kind === "sync"
+    ? (name) => Promise.resolve().then(() => provided.readFileSync(name, "utf8"))
+    : kind === "node-like"
+      ? (name) => provided.promises.readFile(name, "utf8")
+      : (name) => provided.readFile(name, "utf8");
+
+  const writeFile = kind === "sync"
+    ? (name, content) => Promise.resolve().then(() => { provided.writeFileSync(name, content, "utf8"); })
+    : kind === "node-like"
+      ? (name, content) => provided.promises.writeFile(name, content, "utf8")
+      : (name, content) => provided.writeFile(name, content, "utf8");
+
+  async function has(name) {
+    if (kind === "sync" && typeof provided.existsSync === "function") {
+      const r = provided.existsSync(name);
+      if (!r) emit("missing", name);
+      return r;
+    }
+    if (kind === "node-like" && provided.promises && typeof provided.promises.access === "function") {
+      try { await provided.promises.access(name); return true; }
+      catch { emit("missing", name); return false; }
+    }
+    try { await readFile(name); return true; }
+    catch { emit("missing", name); return false; }
+  }
+
+  return {
+    kind,
+    // Only memfs-style Volumes expose toJSON(); real OS fs has no
+    // well-defined "whole filesystem as JSON" concept, so snapshot()
+    // returns null there rather than pretending to support it.
+    supportsSnapshot: typeof provided.toJSON === "function",
+    has,
+    async get(name) {
+      try {
+        const content = await readFile(name);
+        emit("read", name, { found: true });
+        return content;
+      } catch {
+        emit("read", name, { found: false });
+        return undefined;
+      }
+    },
+    async set(name, value) {
+      await writeFile(name, value);
+      emit("write", name, { size: value.length });
+    },
+    async snapshot() {
+      if (typeof provided.toJSON === "function") return provided.toJSON();
+      return null;
+    },
+  };
+}
+
 function sedError(message, code) {
   const err = new Error(message);
   err.code = code;
@@ -1259,7 +1406,7 @@ async function executeCommands(commands, labelIndex, state, ctx, shell) {
 // ==========================================
 
 async function processContent(content, commands, silent, options = {}) {
-  const { filename, vfs, shell, extendedRegex, posix, nullData } = options;
+  const { filename, fsAdapter, shell, extendedRegex, posix, nullData } = options;
   const RS = nullData ? "\0" : "\n";
   const lines = content.split(RS);
   const endsWithSeparator = content.endsWith(RS);
@@ -1283,16 +1430,20 @@ async function processContent(content, commands, silent, options = {}) {
   // and flushed -- in order -- either when `n`/`N` performs a fresh read
   // (matching GNU sed's dump_append_queue-inside-read_pattern_space
   // behavior) or at the natural end of the current cycle.
-  function flushDeferred(state) {
+  async function flushDeferred(state) {
     for (const item of state.deferredOutput) {
       let text = item.text; let chomped = item.chomped; let resolved = item.type !== "r"; let raw = false;
-      if (item.type === "r" && vfs) {
+      if (item.type === "r" && fsAdapter) {
         const filePath = item.filename;
         try {
           if (item.wholeFile) {
-            if (vfsHas(vfs, filePath)) { text = vfsGet(vfs, filePath); resolved = true; raw = true; }
+            const content = await fsAdapter.get(filePath);
+            if (content !== undefined) { text = content; resolved = true; raw = true; }
           } else {
-            if (!fileLineCache.has(filePath)) { if (vfsHas(vfs, filePath)) { fileLineCache.set(filePath, vfsGet(vfs, filePath).split("\n")); fileLinePositions.set(filePath, 0); } }
+            if (!fileLineCache.has(filePath)) {
+              const content = await fsAdapter.get(filePath);
+              if (content !== undefined) { fileLineCache.set(filePath, content.split("\n")); fileLinePositions.set(filePath, 0); }
+            }
             const fileLines = fileLineCache.get(filePath); const pos = fileLinePositions.get(filePath);
             if (fileLines && pos !== undefined && pos < fileLines.length) { text = fileLines[pos]; chomped = true; resolved = true; fileLinePositions.set(filePath, pos + 1); }
           }
@@ -1332,7 +1483,7 @@ async function processContent(content, commands, silent, options = {}) {
       builder.write(state.patternSpace, state.chomped);
     }
 
-    flushDeferred(state);
+    await flushDeferred(state);
 
     if (state.quit || state.quitSilent) {
       didQuit = true;
@@ -1342,7 +1493,7 @@ async function processContent(content, commands, silent, options = {}) {
     }
   }
 
-  if (vfs) { for (const [filePath, fileContent] of fileWrites) vfsSet(vfs, filePath, fileContent); }
+  if (fsAdapter) { for (const [filePath, fileContent] of fileWrites) await fsAdapter.set(filePath, fileContent); }
 
   return { output: builder.result(), exitCode, holdSpace, holdChomped, lastPattern, quit: didQuit, explicitQuit: didExplicitQuit };
 }
@@ -1513,7 +1664,7 @@ function parseShellString(str) {
 
 export default async function sed(commandStr, options = {}) {
   const args = Array.isArray(commandStr) ? commandStr : parseShellString(commandStr);
-  const vfs = options.vfs || {};
+  const fsAdapter = createFsAdapter(options);
   const shell = options.shell || null;
   let stdin = options.stdin !== undefined ? options.stdin : "";
   if (stdin === null) stdin = "";
@@ -1538,8 +1689,8 @@ export default async function sed(commandStr, options = {}) {
     else if (arg === "-f") {
       if (i + 1 < args.length) {
         const scriptFile = args[++i];
-        if (!vfsHas(vfs, scriptFile)) throw sedError(`sed: couldn't open file ${scriptFile}: No such file or directory`, 2);
-        scripts.push(vfsGet(vfs, scriptFile));
+        if (!(await fsAdapter.has(scriptFile))) throw sedError(`sed: couldn't open file ${scriptFile}: No such file or directory`, 2);
+        scripts.push(await fsAdapter.get(scriptFile));
       }
     }
     else if (arg === "--posix") posix = true;
@@ -1559,8 +1710,8 @@ export default async function sed(commandStr, options = {}) {
       if (arg.includes("z")) nullData = true;
       if (arg.includes("f") && i + 1 < args.length) {
         const scriptFile = args[++i];
-        if (!vfsHas(vfs, scriptFile)) throw sedError(`sed: couldn't open file ${scriptFile}: No such file or directory`, 2);
-        scripts.push(vfsGet(vfs, scriptFile));
+        if (!(await fsAdapter.has(scriptFile))) throw sedError(`sed: couldn't open file ${scriptFile}: No such file or directory`, 2);
+        scripts.push(await fsAdapter.get(scriptFile));
       } else if (arg.includes("e") && !arg.includes("n") && !arg.includes("i") && i + 1 < args.length) {
         scripts.push(args[++i]);
       }
@@ -1579,13 +1730,13 @@ export default async function sed(commandStr, options = {}) {
       // those pieces were meant to stay glued together into one script
       // argument. If the script isn't finished yet and stdin is
       // available as a fallback, only treat a bare token as a file
-      // operand when it actually names something in the VFS -- otherwise
-      // fold it back into the script, since a real filename existing in
-      // the VFS is a much stronger signal than an arbitrary token shape.
+      // operand when it actually names something in the filesystem --
+      // otherwise fold it back into the script, since an actual filename
+      // existing is a much stronger signal than an arbitrary token shape.
       const scriptAlreadyStarted = scripts.length > 0 || implicitScript.length > 0;
       const stdinAvailable = !inPlace && options.stdin !== undefined && options.stdin !== null;
       if (!scriptAlreadyStarted) implicitScript.push(arg);
-      else if (stdinAvailable && !vfsHas(vfs, arg)) implicitScript.push(arg);
+      else if (stdinAvailable && !(await fsAdapter.has(arg))) implicitScript.push(arg);
       else files.push(arg);
     }
   }
@@ -1610,25 +1761,40 @@ export default async function sed(commandStr, options = {}) {
   const effectiveSilent = !!(silent || silentMode);
   const effectiveExtendedRegex = !!(extendedRegex || extendedRegexMode);
 
+  // Builds the return value, honoring options.exitCode (bare string vs.
+  // {output, exitCode}) and options.returnFs (adds a `fs` snapshot of the
+  // final filesystem state -- only meaningful for backends that support
+  // it; see createFsAdapter's supportsSnapshot). Neither flag set: returns
+  // exactly what earlier versions returned (a bare string), unchanged.
+  async function finalize(output, exitCodeValue) {
+    const wantsExitCode = !!options.exitCode;
+    const wantsFs = !!options.returnFs;
+    if (!wantsExitCode && !wantsFs) return output;
+    const result = { output };
+    if (wantsExitCode) result.exitCode = exitCodeValue ?? 0;
+    if (wantsFs) result.fs = fsAdapter.supportsSnapshot ? await fsAdapter.snapshot() : null;
+    return result;
+  }
+
   if (inPlace) {
     if (files.length === 0) throw sedError("sed: -i requires at least one file argument", 1);
     let lastExitCode;
     for (const file of files) {
       if (file === "-") continue;
-      if (!vfsHas(vfs, file)) throw sedError(`sed: can't read ${file}: No such file or directory`, 2);
-      const fileContent = vfsGet(vfs, file);
-      const result = await processContent(fileContent, commands, effectiveSilent, { filename: file, vfs, shell, extendedRegex: effectiveExtendedRegex, posix, nullData });
+      if (!(await fsAdapter.has(file))) throw sedError(`sed: can't read ${file}: No such file or directory`, 2);
+      const fileContent = await fsAdapter.get(file);
+      const result = await processContent(fileContent, commands, effectiveSilent, { filename: file, fsAdapter, shell, extendedRegex: effectiveExtendedRegex, posix, nullData });
       if (result.errorMessage) throw sedError(result.errorMessage, result.errorCode || 1);
-      vfsSet(vfs, file, result.output);
+      await fsAdapter.set(file, result.output);
       if (result.exitCode !== undefined) lastExitCode = result.exitCode;
     }
-    return options.exitCode ? { output: "", exitCode: lastExitCode ?? 0 } : "";
+    return finalize("", lastExitCode);
   }
 
   if (files.length === 0) {
-    const result = await processContent(stdin, commands, effectiveSilent, { vfs, shell, extendedRegex: effectiveExtendedRegex, posix, nullData });
+    const result = await processContent(stdin, commands, effectiveSilent, { fsAdapter, shell, extendedRegex: effectiveExtendedRegex, posix, nullData });
     if (result.errorMessage) throw sedError(result.errorMessage, result.errorCode || 1);
-    return options.exitCode ? { output: result.output, exitCode: result.exitCode ?? 0 } : result.output;
+    return finalize(result.output, result.exitCode);
   }
 
   const RS = nullData ? "\0" : "\n";
@@ -1656,11 +1822,11 @@ export default async function sed(commandStr, options = {}) {
       let fileContent;
       if (file === "-") { if (stdinConsumed) fileContent = ""; else { fileContent = stdin; stdinConsumed = true; } }
       else {
-        if (!vfsHas(vfs, file)) throw sedError(`sed: can't read ${file}: No such file or directory`, 2);
-        fileContent = vfsGet(vfs, file);
+        if (!(await fsAdapter.has(file))) throw sedError(`sed: can't read ${file}: No such file or directory`, 2);
+        fileContent = await fsAdapter.get(file);
       }
       const result = await processContent(fileContent, commands, effectiveSilent, {
-        filename: file, vfs, shell, extendedRegex: effectiveExtendedRegex, posix, nullData,
+        filename: file, fsAdapter, shell, extendedRegex: effectiveExtendedRegex, posix, nullData,
         initialHoldSpace: holdSpace, initialHoldChomped: holdChomped, initialLastPattern: lastPattern,
         sharedBuilder
       });
@@ -1670,7 +1836,7 @@ export default async function sed(commandStr, options = {}) {
       if (result.explicitQuit) break;
     }
     const output = sharedBuilder.result();
-    return options.exitCode ? { output, exitCode: lastExitCode ?? 0 } : output;
+    return finalize(output, lastExitCode);
   }
 
   let content = "";
@@ -1679,14 +1845,14 @@ export default async function sed(commandStr, options = {}) {
     let fileContent;
     if (file === "-") { if (stdinConsumed) fileContent = ""; else { fileContent = stdin; stdinConsumed = true; } }
     else {
-      if (!vfsHas(vfs, file)) throw sedError(`sed: can't read ${file}: No such file or directory`, 2);
-      fileContent = vfsGet(vfs, file);
+      if (!(await fsAdapter.has(file))) throw sedError(`sed: can't read ${file}: No such file or directory`, 2);
+      fileContent = await fsAdapter.get(file);
     }
     if (content.length > 0 && fileContent.length > 0 && !content.endsWith(RS)) content += RS;
     content += fileContent;
   }
 
-  const result = await processContent(content, commands, effectiveSilent, { filename: files.length === 1 ? files[0] : undefined, vfs, shell, extendedRegex: effectiveExtendedRegex, posix, nullData });
+  const result = await processContent(content, commands, effectiveSilent, { filename: files.length === 1 ? files[0] : undefined, fsAdapter, shell, extendedRegex: effectiveExtendedRegex, posix, nullData });
   if (result.errorMessage) throw sedError(result.errorMessage, result.errorCode || 1);
-  return options.exitCode ? { output: result.output, exitCode: result.exitCode ?? 0 } : result.output;
+  return finalize(result.output, result.exitCode);
 }
